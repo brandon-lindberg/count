@@ -1,0 +1,99 @@
+{% extends 'base.html' %}
+{% block content %}
+<div class="grid cols-4">
+  <div class="card"><span class="metric-label">Tracked Apps</span><div class="metric-value">{{ total_apps }}</div></div>
+  <div class="card"><span class="metric-label">Hot</span><div class="metric-value">{{ hot_count }}</div></div>
+  <div class="card"><span class="metric-label">Warm</span><div class="metric-value">{{ warm_count }}</div></div>
+  <div class="card"><span class="metric-label">Cold</span><div class="metric-value">{{ cold_count }}</div></div>
+</div>
+
+<div class="card" style="margin-top: 18px;">
+  <div class="toolbar" style="justify-content: space-between;">
+    <div>
+      <h1 style="margin: 0;">Admin Dashboard</h1>
+      <p class="muted">Inspect import jobs, poll activity, and tracked app coverage.</p>
+    </div>
+    <form method="post" action="/admin/actions/import-registry" class="inline">
+      <button class="primary" type="submit">Import Registry Now</button>
+    </form>
+  </div>
+</div>
+
+<div class="grid cols-4" style="margin-top: 18px;">
+  {% for item in status_cards %}
+  <div class="card">
+    <span class="metric-label">{{ item.job_label }}</span>
+    <div style="margin-top: 12px;">
+      <span class="status {{ item.status }}">{{ item.status }}</span>
+    </div>
+  </div>
+  {% endfor %}
+</div>
+
+<div class="card" style="margin-top: 18px;">
+  {% if unresolved_failures %}
+  <div class="alert warn">
+    <strong>{{ unresolved_failures|length }} active job issue{{ '' if unresolved_failures|length == 1 else 's' }}</strong>
+    <div class="muted" style="margin-top: 6px;">Only the latest unresolved failures stay highlighted here. Historical errors are collapsed in the job log below.</div>
+  </div>
+  {% else %}
+  <div class="alert ok">
+    <strong>No active job failures.</strong>
+    <div class="muted" style="margin-top: 6px;">The dashboard may still show older resolved errors in the history table, but they are no longer current issues.</div>
+  </div>
+  {% endif %}
+</div>
+
+<div class="card" style="margin-top: 18px;">
+  <div class="toolbar" style="justify-content: space-between; margin-bottom: 12px;">
+    <h2 style="margin: 0;">Recent Jobs</h2>
+    <form method="post" action="/admin/actions/clear-job-history" class="inline" onsubmit="return confirm('Clear all recorded job history? This only removes dashboard job rows.');">
+      <button class="danger" type="submit">Clear Job History</button>
+    </form>
+  </div>
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th>Job</th>
+          <th>Status</th>
+          <th>Started</th>
+          <th>Finished</th>
+          <th>Processed</th>
+          <th>Success</th>
+          <th>Failure</th>
+          <th>Notes</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for job in recent_jobs %}
+        <tr>
+          <td>{{ job.job_label }}</td>
+          <td><span class="status {{ job.status }}">{{ job.status }}</span></td>
+          <td>{{ job.started_at }}</td>
+          <td>{{ job.finished_at }}</td>
+          <td>{{ job.processed_count }}</td>
+          <td>{{ job.success_count }}</td>
+          <td>{{ job.failure_count }}</td>
+          <td>
+            {% if job.error_summary %}
+            <div class="error-preview">{{ job.error_preview }}</div>
+            <details class="job-error">
+              <summary>Show details</summary>
+              <pre>{{ job.error_summary }}</pre>
+            </details>
+            {% elif job.status == 'idle' %}
+            <span class="muted">No apps were due for this run.</span>
+            {% else %}
+            <span class="muted">-</span>
+            {% endif %}
+          </td>
+        </tr>
+        {% else %}
+        <tr><td colspan="8" class="muted">No jobs yet.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endblock %}

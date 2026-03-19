@@ -1,0 +1,93 @@
+{% extends 'base.html' %}
+{% block content %}
+<div class="card">
+  <div class="toolbar" style="justify-content: space-between; align-items: flex-start;">
+    <div>
+      <h1 style="margin-top: 0; margin-bottom: 6px;">{{ app_item.title }}</h1>
+      <div class="muted">Steam App ID {{ app_item.steam_app_id }}</div>
+    </div>
+    <div class="actions">
+      <form method="post" action="/admin/apps/{{ app_item.steam_app_id }}/poll" class="inline">
+        <button class="primary" type="submit">Poll Now</button>
+      </form>
+      <form method="post" action="/admin/apps/{{ app_item.steam_app_id }}/tier" class="inline">
+        <select name="tier">
+          <option value="">Auto tier</option>
+          {% for tier in tier_options %}
+          <option value="{{ tier }}" {% if app_item.manual_tier_override and app_item.manual_tier_override.value == tier %}selected{% endif %}>{{ tier }}</option>
+          {% endfor %}
+        </select>
+        <button type="submit">Save Tier Override</button>
+      </form>
+    </div>
+  </div>
+</div>
+
+<div class="grid cols-4" style="margin-top: 18px;">
+  <div class="card"><div class="muted">Effective Tier</div><div style="font-size: 28px; font-weight: 800; margin-top: 8px;">{{ app_item.effective_tier.value }}</div></div>
+  <div class="card"><div class="muted">Last Known Players</div><div style="font-size: 28px; font-weight: 800; margin-top: 8px;">{{ app_item.last_known_players or '-' }}</div></div>
+  <div class="card"><div class="muted">24h High</div><div style="font-size: 28px; font-weight: 800; margin-top: 8px;">{{ app_item.latest_24h_high or '-' }}</div></div>
+  <div class="card"><div class="muted">24h Low</div><div style="font-size: 28px; font-weight: 800; margin-top: 8px;">{{ app_item.latest_24h_low or '-' }}</div></div>
+</div>
+
+<div class="card" style="margin-top: 18px;">
+  <h2 style="margin-top: 0;">Hourly 24h High / Low</h2>
+  {{ history_svg | safe }}
+</div>
+
+<div class="card" style="margin-top: 18px;">
+  <h2 style="margin-top: 0;">Recent Raw Samples</h2>
+  <table>
+    <thead>
+      <tr>
+        <th>Sampled At</th>
+        <th>Players</th>
+        <th>Provider</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for sample in samples %}
+      <tr>
+        <td>{{ sample.sampled_at }}</td>
+        <td>{{ sample.concurrent_players }}</td>
+        <td>{{ sample.provider }}</td>
+      </tr>
+      {% else %}
+      <tr><td colspan="3" class="muted">No samples captured yet.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+
+<div class="card" style="margin-top: 18px;">
+  <h2 style="margin-top: 0;">Recent Hourly Rollups</h2>
+  <table>
+    <thead>
+      <tr>
+        <th>Bucket</th>
+        <th>Window End</th>
+        <th>24h High</th>
+        <th>24h Low</th>
+        <th>Latest Players</th>
+        <th>Sample Count</th>
+        <th>Tier</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for point in history_points|reverse %}
+      <tr>
+        <td>{{ point.bucket_started_at }}</td>
+        <td>{{ point.window_ending_at }}</td>
+        <td>{{ point.observed_24h_high }}</td>
+        <td>{{ point.observed_24h_low }}</td>
+        <td>{{ point.latest_players }}</td>
+        <td>{{ point.sample_count }}</td>
+        <td>{{ point.effective_tier_at_capture.value }}</td>
+      </tr>
+      {% else %}
+      <tr><td colspan="7" class="muted">No rollups captured yet.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endblock %}

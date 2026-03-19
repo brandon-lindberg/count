@@ -1,0 +1,112 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>{{ title or 'Steam Player Count Scraper' }}</title>
+    <style>
+      :root {
+        color-scheme: dark;
+        --bg: #0f0d0c;
+        --panel: #1a1714;
+        --panel-strong: #211d19;
+        --border: #3b342d;
+        --text: #efe9e1;
+        --muted: #b4a79a;
+        --accent: #beff0a;
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+        background: radial-gradient(circle at top, #241d17, var(--bg) 40%);
+        color: var(--text);
+      }
+      a { color: var(--accent); text-decoration: none; }
+      .shell { max-width: 1180px; margin: 0 auto; padding: 24px; }
+      .nav { display: flex; gap: 16px; margin-bottom: 24px; }
+      .nav a { font-weight: 700; }
+      .card {
+        background: color-mix(in srgb, var(--panel) 92%, black);
+        border: 1px solid var(--border);
+        border-radius: 18px;
+        padding: 18px;
+      }
+      .grid { display: grid; gap: 16px; }
+      .grid.cols-4 { grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); }
+      table { width: 100%; border-collapse: collapse; }
+      th, td { padding: 10px 12px; text-align: left; border-bottom: 1px solid var(--border); }
+      th { color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: 0.08em; }
+      td { vertical-align: top; }
+      .toolbar, form.inline { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
+      input, select, button {
+        background: var(--panel-strong);
+        color: var(--text);
+        border: 1px solid var(--border);
+        border-radius: 10px;
+        padding: 10px 12px;
+      }
+      button { cursor: pointer; }
+      button.primary { background: linear-gradient(135deg, #647748, #95c11f); color: #111; border: none; font-weight: 700; }
+      button.danger { background: rgba(167, 53, 14, 0.22); color: #ffd4c8; border-color: rgba(255, 138, 91, 0.35); font-weight: 700; }
+      .muted { color: var(--muted); }
+      .pill { display: inline-flex; align-items: center; padding: 4px 10px; border-radius: 999px; border: 1px solid var(--border); }
+      .pill.hot { color: #ffb876; }
+      .pill.warm { color: var(--accent); }
+      .pill.cold { color: #9bc2ff; }
+      .status {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        padding: 5px 10px;
+        border-radius: 999px;
+        font-size: 12px;
+        font-weight: 700;
+        letter-spacing: 0.04em;
+        text-transform: uppercase;
+        border: 1px solid var(--border);
+      }
+      .status.ok { color: #0f1a06; background: rgba(190, 255, 10, 0.85); border-color: transparent; }
+      .status.idle { color: #c8d6eb; background: rgba(98, 119, 143, 0.22); }
+      .status.failed { color: #ffd4c8; background: rgba(167, 53, 14, 0.28); border-color: rgba(255, 138, 91, 0.45); }
+      .status.resolved { color: #f3e0b8; background: rgba(124, 92, 23, 0.26); border-color: rgba(216, 197, 147, 0.35); }
+      .actions { display: flex; gap: 10px; flex-wrap: wrap; }
+      .table-wrap { overflow-x: auto; }
+      .metric-value { font-size: 40px; font-weight: 800; margin-top: 8px; }
+      .metric-label { display: block; color: var(--muted); font-size: 13px; text-transform: uppercase; letter-spacing: 0.08em; }
+      .error-preview { max-width: 360px; color: var(--muted); line-height: 1.5; overflow-wrap: anywhere; }
+      details.job-error { margin-top: 8px; }
+      details.job-error summary { cursor: pointer; color: var(--accent); }
+      details.job-error pre {
+        margin: 10px 0 0;
+        padding: 12px;
+        border-radius: 12px;
+        background: rgba(0, 0, 0, 0.25);
+        border: 1px solid var(--border);
+        color: var(--muted);
+        white-space: pre-wrap;
+        overflow-wrap: anywhere;
+        font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+        font-size: 12px;
+        line-height: 1.5;
+      }
+      .alert {
+        border-radius: 14px;
+        padding: 14px 16px;
+        border: 1px solid var(--border);
+      }
+      .alert.ok { background: rgba(79, 95, 36, 0.22); border-color: rgba(149, 193, 31, 0.28); }
+      .alert.warn { background: rgba(167, 53, 14, 0.14); border-color: rgba(255, 138, 91, 0.32); }
+    </style>
+  </head>
+  <body>
+    <div class="shell">
+      <nav class="nav">
+        <a href="/admin">Dashboard</a>
+        <a href="/admin/apps">Tracked Apps</a>
+        <a href="/health">Health</a>
+      </nav>
+      {% block content %}{% endblock %}
+    </div>
+  </body>
+</html>

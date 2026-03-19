@@ -1,0 +1,11 @@
+services:
+  - type: web
+    name: player-count-scraper-api
+    runtime: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
+  - type: worker
+    name: player-count-scraper-worker
+    runtime: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: python -m app.worker
