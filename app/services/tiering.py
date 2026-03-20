@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -23,6 +23,18 @@ def resolve_effective_tier(manual_override: Tier | None, auto_tier: Tier) -> Tie
     return manual_override or auto_tier
 
 
+def is_release_hot_window(
+    source_release_date: date | None,
+    settings: Settings,
+    now: datetime | None = None,
+) -> bool:
+    if source_release_date is None:
+        return False
+    effective_date = (now or datetime.now(timezone.utc)).astimezone(timezone.utc).date()
+    days_since_release = (effective_date - source_release_date).days
+    return 0 <= days_since_release < settings.release_hot_days
+
+
 def poll_interval_minutes(tier: Tier, settings: Settings) -> int:
     if tier == Tier.hot:
         return settings.hot_poll_minutes
@@ -39,6 +51,10 @@ async def refresh_effective_tier(
 ) -> Tier:
     if tracked_app.manual_tier_override is not None:
         tracked_app.effective_tier = tracked_app.manual_tier_override
+        return tracked_app.effective_tier
+
+    if is_release_hot_window(tracked_app.source_release_date, settings, now):
+        tracked_app.effective_tier = Tier.hot
         return tracked_app.effective_tier
 
     cutoff = (now or datetime.now(timezone.utc)) - timedelta(days=7)

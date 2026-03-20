@@ -1,0 +1,60 @@
+{% extends 'base.html' %}
+{% block content %}
+<div class="card">
+  <div class="toolbar" style="justify-content: space-between;">
+    <div>
+      <h1 style="margin: 0;">Service Health</h1>
+      <p class="muted">Readable health summary for the scraper API, database connection, and worker activity.</p>
+    </div>
+    <a href="/health" class="status ok">Raw JSON</a>
+  </div>
+</div>
+
+<div class="grid cols-4" style="margin-top: 18px;">
+  <div class="card"><span class="metric-label">Tracked Apps</span><div class="metric-value">{{ total_apps | comma_number }}</div></div>
+  <div class="card"><span class="metric-label">Active Apps</span><div class="metric-value">{{ active_apps | comma_number }}</div></div>
+  <div class="card"><span class="metric-label">Apps With Samples</span><div class="metric-value">{{ sampled_apps | comma_number }}</div></div>
+  <div class="card"><span class="metric-label">Apps With Errors</span><div class="metric-value">{{ apps_with_errors | comma_number }}</div></div>
+</div>
+
+<div class="grid cols-4" style="margin-top: 18px;">
+  {% for item in checks %}
+  <div class="card check-card">
+    <div class="toolbar" style="justify-content: space-between; align-items: flex-start;">
+      <span class="metric-label">{{ item.label }}</span>
+      <span class="status {{ item.status }}">{{ item.status }}</span>
+    </div>
+    <p>{{ item.detail }}</p>
+    <div class="check-meta">{{ item.meta }}</div>
+  </div>
+  {% endfor %}
+</div>
+
+<div class="card" style="margin-top: 18px;">
+  <h2 style="margin-top: 0;">Background Jobs</h2>
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th>Job</th>
+          <th>Status</th>
+          <th>Last Run</th>
+          <th>Last Success</th>
+          <th>Notes</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for item in job_health_cards %}
+        <tr>
+          <td>{{ item.job_label }}</td>
+          <td><span class="status {{ item.status }}">{{ item.status }}</span></td>
+          <td>{{ item.last_run }}</td>
+          <td>{{ item.last_success }}</td>
+          <td class="muted">{{ item.notes }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endblock %}

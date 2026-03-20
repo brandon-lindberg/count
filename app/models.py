@@ -1,10 +1,10 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date, datetime
 from enum import Enum
 from typing import Optional
 
-from sqlalchemy import BigInteger, Boolean, DateTime, Enum as SqlEnum, ForeignKey, Index, Integer, String, Text, UniqueConstraint, func, text
+from sqlalchemy import BigInteger, Boolean, Date, DateTime, Enum as SqlEnum, ForeignKey, Index, Integer, String, Text, UniqueConstraint, func, text
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 
@@ -24,6 +24,7 @@ class TrackedApp(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     source_game_public_id: Mapped[Optional[str]] = mapped_column(String(64), index=True)
     source_game_id: Mapped[Optional[int]] = mapped_column(Integer, index=True)
+    source_release_date: Mapped[Optional[date]] = mapped_column(Date, index=True)
     steam_app_id: Mapped[int] = mapped_column(Integer, unique=True, index=True, nullable=False)
     title: Mapped[str] = mapped_column(String(512), nullable=False)
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, server_default=text("true"))
@@ -35,6 +36,8 @@ class TrackedApp(Base):
     last_success_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
     last_error: Mapped[Optional[str]] = mapped_column(Text)
     last_known_players: Mapped[Optional[int]] = mapped_column(Integer)
+    all_time_peak_players: Mapped[Optional[int]] = mapped_column(Integer)
+    all_time_peak_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
     latest_24h_high: Mapped[Optional[int]] = mapped_column(Integer)
     latest_24h_low: Mapped[Optional[int]] = mapped_column(Integer)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)

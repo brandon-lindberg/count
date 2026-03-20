@@ -1,10 +1,10 @@
 {% extends 'base.html' %}
 {% block content %}
 <div class="grid cols-4">
-  <div class="card"><span class="metric-label">Tracked Apps</span><div class="metric-value">{{ total_apps }}</div></div>
-  <div class="card"><span class="metric-label">Hot</span><div class="metric-value">{{ hot_count }}</div></div>
-  <div class="card"><span class="metric-label">Warm</span><div class="metric-value">{{ warm_count }}</div></div>
-  <div class="card"><span class="metric-label">Cold</span><div class="metric-value">{{ cold_count }}</div></div>
+  <a class="card card-link" href="/admin/apps"><span class="metric-label">Tracked Apps</span><div class="metric-value">{{ total_apps | comma_number }}</div></a>
+  <a class="card card-link" href="/admin/apps?tier=hot"><span class="metric-label">Hot</span><div class="metric-value">{{ hot_count | comma_number }}</div></a>
+  <a class="card card-link" href="/admin/apps?tier=warm"><span class="metric-label">Warm</span><div class="metric-value">{{ warm_count | comma_number }}</div></a>
+  <a class="card card-link" href="/admin/apps?tier=cold"><span class="metric-label">Cold</span><div class="metric-value">{{ cold_count | comma_number }}</div></a>
 </div>
 
 <div class="card" style="margin-top: 18px;">
@@ -13,11 +13,98 @@
       <h1 style="margin: 0;">Admin Dashboard</h1>
       <p class="muted">Inspect import jobs, poll activity, and tracked app coverage.</p>
     </div>
-    <form method="post" action="/admin/actions/import-registry" class="inline">
-      <button class="primary" type="submit">Import Registry Now</button>
-    </form>
+    <div class="actions">
+      {% if mirror_configured %}
+      <form method="post" action="/admin/actions/backfill-main-db" class="inline">
+        <label class="checkbox-inline">
+          <input type="checkbox" name="only_unmirrored" value="true" checked />
+          <span>Only unmirrored</span>
+        </label>
+        <button type="submit" {% if backfill_status.running %}disabled{% endif %}>Backfill All Games</button>
+      </form>
+      {% endif %}
+      <form method="post" action="/admin/actions/import-registry" class="inline">
+        <button class="primary" type="submit">Import Registry Now</button>
+      </form>
+    </div>
   </div>
 </div>
+
+{% if action_notice %}
+<div class="card" style="margin-top: 18px;">
+  <div class="alert {{ action_notice_level if action_notice_level in ['ok', 'warn'] else 'ok' }}">
+    <strong>{{ action_notice }}</strong>
+  </div>
+</div>
+{% endif %}
+
+{% if mirror_configured %}
+<div class="card progress-panel" style="margin-top: 18px;" id="backfill-panel" data-status-url="/admin/backfill-status">
+  <div class="toolbar" style="justify-content: space-between; align-items: flex-start;">
+    <div>
+      <h2 style="margin: 0;">Main DB Backfill</h2>
+      <div class="muted" id="backfill-message">{{ backfill_status.current_message }}</div>
+    </div>
+    <span class="status {% if backfill_status.state == 'failed' %}failed{% elif backfill_status.running %}warn{% elif backfill_status.state == 'completed' %}ok{% else %}idle{% endif %}" id="backfill-state">
+      {% if backfill_status.running %}running{% else %}{{ backfill_status.state }}{% endif %}
+    </span>
+  </div>
+
+  <div class="progress-track" aria-label="Backfill progress">
+    <div class="progress-fill" id="backfill-fill" style="width: {{ '%.1f'|format(backfill_status.percent_complete) }}%;"></div>
+  </div>
+
+  <div class="progress-meta">
+    <span id="backfill-counts">{{ backfill_status.processed_apps | comma_number }} / {{ backfill_status.total_apps | comma_number }} apps</span>
+    <span id="backfill-percent">{{ '%.1f'|format(backfill_status.percent_complete) }}%</span>
+    <span id="backfill-elapsed">Elapsed {{ backfill_status.elapsed_label }}</span>
+    <span id="backfill-eta">ETA {{ backfill_status.eta_label }}</span>
+  </div>
+
+  <div class="progress-stats">
+    <div class="progress-stat">
+      <span class="metric-label">Mirrored Apps</span>
+      <span class="progress-stat-value" id="backfill-apps-processed">{{ backfill_status.apps_processed | comma_number }}</span>
+    </div>
+    <div class="progress-stat">
+      <span class="metric-label">Skipped Unmapped</span>
+      <span class="progress-stat-value" id="backfill-skipped-unmapped">{{ backfill_status.apps_skipped_unmapped | comma_number }}</span>
+    </div>
+    <div class="progress-stat">
+      <span class="metric-label">Skipped Mirrored</span>
+      <span class="progress-stat-value" id="backfill-skipped-mirrored">{{ backfill_status.apps_skipped_already_mirrored | comma_number }}</span>
+    </div>
+    <div class="progress-stat">
+      <span class="metric-label">Failed Apps</span>
+      <span class="progress-stat-value" id="backfill-failed">{{ backfill_status.apps_failed | comma_number }}</span>
+    </div>
+    <div class="progress-stat">
+      <span class="metric-label">Raw Inserted</span>
+      <span class="progress-stat-value" id="backfill-raw-inserted">{{ backfill_status.raw_samples_inserted | comma_number }}</span>
+    </div>
+    <div class="progress-stat">
+      <span class="metric-label">Range Upserted</span>
+      <span class="progress-stat-value" id="backfill-range-upserted">{{ backfill_status.range_points_upserted | comma_number }}</span>
+    </div>
+  </div>
+
+  <div class="progress-meta">
+    <span id="backfill-current-app">
+      {% if backfill_status.current_steam_app_id %}
+      Current app: {{ backfill_status.current_title }} ({{ backfill_status.current_steam_app_id }})
+      {% else %}
+      Current app: -
+      {% endif %}
+    </span>
+    <span id="backfill-started">Started {{ backfill_status.started_at_label }}</span>
+    <span id="backfill-finished">Finished {{ backfill_status.finished_at_label }}</span>
+  </div>
+
+  <div class="muted" id="backfill-error">
+    {% if backfill_status.last_error %}Last error: {{ backfill_status.last_error }}{% endif %}
+  </div>
+</div>
+{% endif %}
 
 <div class="grid cols-4" style="margin-top: 18px;">
   {% for item in status_cards %}
@@ -72,9 +159,9 @@
           <td><span class="status {{ job.status }}">{{ job.status }}</span></td>
           <td>{{ job.started_at }}</td>
           <td>{{ job.finished_at }}</td>
-          <td>{{ job.processed_count }}</td>
-          <td>{{ job.success_count }}</td>
-          <td>{{ job.failure_count }}</td>
+          <td>{{ job.processed_count | comma_number }}</td>
+          <td>{{ job.success_count | comma_number }}</td>
+          <td>{{ job.failure_count | comma_number }}</td>
           <td>
             {% if job.error_summary %}
             <div class="error-preview">{{ job.error_preview }}</div>
@@ -96,4 +183,81 @@
     </table>
   </div>
 </div>
+
+{% if mirror_configured %}
+<script>
+  (() => {
+    const panel = document.getElementById('backfill-panel');
+    if (!panel) return;
+
+    const statusUrl = panel.dataset.statusUrl;
+    const comma = new Intl.NumberFormat('en-US');
+
+    function formatCount(value) {
+      return comma.format(Number(value || 0));
+    }
+
+    function setText(id, value) {
+      const element = document.getElementById(id);
+      if (element) element.textContent = value;
+    }
+
+    function updateStatus(payload) {
+      const fill = document.getElementById('backfill-fill');
+      if (fill) fill.style.width = `${payload.percent_complete.toFixed(1)}%`;
+
+      setText('backfill-message', payload.current_message || 'No backfill run started.');
+      setText('backfill-counts', `${formatCount(payload.processed_apps)} / ${formatCount(payload.total_apps)} apps`);
+      setText('backfill-percent', `${payload.percent_complete.toFixed(1)}%`);
+      setText('backfill-elapsed', `Elapsed ${payload.elapsed_label}`);
+      setText('backfill-eta', `ETA ${payload.eta_label}`);
+      setText('backfill-apps-processed', formatCount(payload.apps_processed));
+      setText('backfill-skipped-unmapped', formatCount(payload.apps_skipped_unmapped));
+      setText('backfill-skipped-mirrored', formatCount(payload.apps_skipped_already_mirrored));
+      setText('backfill-failed', formatCount(payload.apps_failed));
+      setText('backfill-raw-inserted', formatCount(payload.raw_samples_inserted));
+      setText('backfill-range-upserted', formatCount(payload.range_points_upserted));
+      setText(
+        'backfill-current-app',
+        payload.current_steam_app_id
+          ? `Current app: ${payload.current_title} (${payload.current_steam_app_id})`
+          : 'Current app: -'
+      );
+      setText('backfill-started', `Started ${payload.started_at_label}`);
+      setText('backfill-finished', `Finished ${payload.finished_at_label}`);
+      setText('backfill-error', payload.last_error ? `Last error: ${payload.last_error}` : '');
+
+      const state = document.getElementById('backfill-state');
+      if (state) {
+        const stateText = payload.running ? 'running' : payload.state;
+        state.textContent = stateText;
+        state.className = 'status';
+        if (payload.state === 'failed') {
+          state.classList.add('failed');
+        } else if (payload.running) {
+          state.classList.add('warn');
+        } else if (payload.state === 'completed') {
+          state.classList.add('ok');
+        } else {
+          state.classList.add('idle');
+        }
+      }
+    }
+
+    async function poll() {
+      try {
+        const response = await fetch(statusUrl, { headers: { Accept: 'application/json' } });
+        if (!response.ok) return;
+        const payload = await response.json();
+        updateStatus(payload);
+      } catch (error) {
+        console.error('Failed to refresh backfill status', error);
+      }
+    }
+
+    poll();
+    window.setInterval(poll, 3000);
+  })();
+</script>
+{% endif %}
 {% endblock %}

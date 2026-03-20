@@ -3,6 +3,7 @@
 <div class="card">
   <h1 style="margin-top: 0;">Tracked Apps</h1>
   <form method="get" class="toolbar" style="margin-bottom: 18px;">
+    <input type="hidden" name="page" value="1" />
     <input type="text" name="search" placeholder="Search title" value="{{ search }}" />
     <select name="tier">
       <option value="">All tiers</option>
@@ -15,38 +16,93 @@
       <option value="true" {% if selected_active == 'true' %}selected{% endif %}>Active</option>
       <option value="false" {% if selected_active == 'false' %}selected{% endif %}>Inactive</option>
     </select>
+    <select name="sort">
+      {% for option in sort_options %}
+      <option value="{{ option.value }}" {% if selected_sort == option.value %}selected{% endif %}>{{ option.label }}</option>
+      {% endfor %}
+    </select>
+    <select name="per_page">
+      {% for option in per_page_options %}
+      <option value="{{ option }}" {% if selected_per_page == option %}selected{% endif %}>{{ option }} per page</option>
+      {% endfor %}
+    </select>
     <button type="submit">Apply</button>
   </form>
+
+  <div class="pagination-summary">
+    {% if total > 0 %}
+    <span>Showing {{ row_start | comma_number }}-{{ row_end | comma_number }} of {{ total | comma_number }} tracked apps</span>
+    <span>Page {{ current_page | comma_number }} of {{ total_pages | comma_number }}</span>
+    {% else %}
+    <span>0 tracked apps matched the current filters.</span>
+    {% endif %}
+  </div>
 
   <table>
     <thead>
       <tr>
+        <th>#</th>
         <th>Steam App ID</th>
         <th>Title</th>
         <th>Tier</th>
         <th>Active</th>
-        <th>Last Players</th>
+        <th>Current Players</th>
         <th>24h High</th>
         <th>24h Low</th>
         <th>Last Success</th>
+        <th>Chart</th>
       </tr>
     </thead>
     <tbody>
       {% for item in apps %}
       <tr>
+        <td>{{ row_offset + loop.index }}</td>
         <td><a href="/admin/apps/{{ item.steam_app_id }}">{{ item.steam_app_id }}</a></td>
-        <td>{{ item.title }}</td>
+        <td><a class="title-link" href="/admin/apps/{{ item.steam_app_id }}">{{ item.title }}</a></td>
         <td><span class="pill {{ item.effective_tier.value }}">{{ item.effective_tier.value }}</span></td>
         <td>{{ 'yes' if item.is_active else 'no' }}</td>
-        <td>{{ item.last_known_players if item.last_known_players is not none else '-' }}</td>
-        <td>{{ item.latest_24h_high if item.latest_24h_high is not none else '-' }}</td>
-        <td>{{ item.latest_24h_low if item.latest_24h_low is not none else '-' }}</td>
+        <td>{{ item.last_known_players | comma_number }}</td>
+        <td>{{ item.latest_24h_high | comma_number }}</td>
+        <td>{{ item.latest_24h_low | comma_number }}</td>
         <td>{{ item.last_success_at or '-' }}</td>
+        <td><a class="table-action" href="/admin/apps/{{ item.steam_app_id }}">View Chart</a></td>
       </tr>
       {% else %}
-      <tr><td colspan="8" class="muted">No tracked apps matched the current filters.</td></tr>
+      <tr><td colspan="10" class="muted">No tracked apps matched the current filters.</td></tr>
       {% endfor %}
     </tbody>
   </table>
+
+  {% if total_pages > 1 %}
+  <div class="pagination-bar">
+    <div class="pagination-links">
+      {% if previous_page_url %}
+      <a class="pagination-link" href="{{ first_page_url }}">First</a>
+      <a class="pagination-link" href="{{ previous_page_url }}">Previous</a>
+      {% else %}
+      <span class="pagination-link disabled">First</span>
+      <span class="pagination-link disabled">Previous</span>
+      {% endif %}
+
+      {% for item in page_numbers %}
+      {% if item.value is none %}
+      <span class="pagination-ellipsis">…</span>
+      {% elif item.current %}
+      <span class="pagination-link active">{{ item.value }}</span>
+      {% else %}
+      <a class="pagination-link" href="{{ item.url }}">{{ item.value }}</a>
+      {% endif %}
+      {% endfor %}
+
+      {% if next_page_url %}
+      <a class="pagination-link" href="{{ next_page_url }}">Next</a>
+      <a class="pagination-link" href="{{ last_page_url }}">Last</a>
+      {% else %}
+      <span class="pagination-link disabled">Next</span>
+      <span class="pagination-link disabled">Last</span>
+      {% endif %}
+    </div>
+  </div>
+  {% endif %}
 </div>
 {% endblock %}

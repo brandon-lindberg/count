@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 
 import httpx
 from sqlalchemy import select
@@ -9,12 +9,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import Settings
 from app.models import Tier, TrackedApp
+from app.services.tiering import is_release_hot_window
 
 
 @dataclass(slots=True)
 class SourceGame:
     source_game_id: int | None
     source_game_public_id: str | None
+    source_release_date: date | None
     steam_app_id: int
     title: str
 
@@ -24,6 +26,12 @@ class RegistryImportStats:
     imported: int = 0
     activated: int = 0
     deactivated: int = 0
+
+
+def imported_at_for_source_position(base_time: datetime, position: int) -> datetime:
+    # Preserve source sort order inside last_imported_at so first-pass polling can
+    # process the newest imported games before older backlog rows.
+    return base_time - timedelta(microseconds=position)
 
 
 def build_source_headers(settings: Settings) -> dict[str, str]:
@@ -48,10 +56,18 @@ def extract_tracked_games(payload: dict) -> list[SourceGame]:
         title = (item.get("title") or "").strip()
         if steam_app_id is None or not title:
             continue
+        release_date_value = item.get("release_date")
+        release_date = None
+        if isinstance(release_date_value, str) and release_date_value:
+            try:
+                release_date = date.fromisoformat(release_date_value)
+            except ValueError:
+                release_date = None
         tracked.append(
             SourceGame(
                 source_game_id=item.get("id"),
                 source_game_public_id=item.get("public_id"),
+                source_release_date=release_date,
                 steam_app_id=int(steam_app_id),
                 title=title,
             )
@@ -59,11 +75,40 @@ def extract_tracked_games(payload: dict) -> list[SourceGame]:
     return tracked
 
 
+def sync_existing_tracked_app_from_source(
+    tracked_app: TrackedApp,
+    source_game: SourceGame,
+    *,
+    imported_at: datetime,
+    settings: Settings,
+    now: datetime,
+) -> bool:
+    activated = not tracked_app.is_active
+    tracked_app.is_active = True
+    tracked_app.last_imported_at = imported_at
+
+    if tracked_app.import_source == "manual":
+        return activated
+
+    tracked_app.source_game_id = source_game.source_game_id
+    tracked_app.source_game_public_id = source_game.source_game_public_id
+    tracked_app.source_release_date = source_game.source_release_date
+    tracked_app.title = source_game.title
+    tracked_app.import_source = "backend_api"
+    if tracked_app.manual_tier_override is not None:
+        tracked_app.effective_tier = tracked_app.manual_tier_override
+    elif is_release_hot_window(source_game.source_release_date, settings, now):
+        tracked_app.effective_tier = Tier.hot
+
+    return activated
+
+
 async def import_registry(session: AsyncSession, settings: Settings) -> RegistryImportStats:
     now = datetime.now(timezone.utc)
     stats = RegistryImportStats()
     seen_app_ids: set[int] = set()
     games_url = build_source_games_url(settings)
+    import_position = 0
 
     async with httpx.AsyncClient(timeout=settings.http_timeout_seconds, headers=build_source_headers(settings)) as client:
         page = 1
@@ -83,35 +128,37 @@ async def import_registry(session: AsyncSession, settings: Settings) -> Registry
             total_pages = int(payload.get("total_pages") or 1)
 
             for source_game in extract_tracked_games(payload):
+                imported_at = imported_at_for_source_position(now, import_position)
                 stats.imported += 1
+                import_position += 1
                 seen_app_ids.add(source_game.steam_app_id)
                 tracked_app = await session.scalar(
                     select(TrackedApp).where(TrackedApp.steam_app_id == source_game.steam_app_id)
                 )
                 if tracked_app is None:
+                    initial_tier = Tier.hot if is_release_hot_window(source_game.source_release_date, settings, now) else Tier.warm
                     tracked_app = TrackedApp(
                         source_game_id=source_game.source_game_id,
                         source_game_public_id=source_game.source_game_public_id,
+                        source_release_date=source_game.source_release_date,
                         steam_app_id=source_game.steam_app_id,
                         title=source_game.title,
                         is_active=True,
                         import_source="backend_api",
-                        effective_tier=Tier.warm,
-                        last_imported_at=now,
+                        effective_tier=initial_tier,
+                        last_imported_at=imported_at,
                     )
                     session.add(tracked_app)
                     stats.activated += 1
                 else:
-                    if not tracked_app.is_active:
+                    if sync_existing_tracked_app_from_source(
+                        tracked_app,
+                        source_game,
+                        imported_at=imported_at,
+                        settings=settings,
+                        now=now,
+                    ):
                         stats.activated += 1
-                    tracked_app.source_game_id = source_game.source_game_id
-                    tracked_app.source_game_public_id = source_game.source_game_public_id
-                    tracked_app.title = source_game.title
-                    tracked_app.is_active = True
-                    tracked_app.import_source = "backend_api"
-                    tracked_app.last_imported_at = now
-                    if tracked_app.manual_tier_override is not None:
-                        tracked_app.effective_tier = tracked_app.manual_tier_override
                 await session.flush()
             page += 1
 

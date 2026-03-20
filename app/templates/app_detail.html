@@ -10,6 +10,12 @@
       <form method="post" action="/admin/apps/{{ app_item.steam_app_id }}/poll" class="inline">
         <button class="primary" type="submit">Poll Now</button>
       </form>
+      {% if mirror_configured %}
+      <form method="post" action="/admin/apps/{{ app_item.steam_app_id }}/backfill-main-db" class="inline">
+        <input type="hidden" name="window" value="{{ selected_window }}" />
+        <button type="submit">Backfill Main DB</button>
+      </form>
+      {% endif %}
       <form method="post" action="/admin/apps/{{ app_item.steam_app_id }}/tier" class="inline">
         <select name="tier">
           <option value="">Auto tier</option>
@@ -23,16 +29,51 @@
   </div>
 </div>
 
+{% if action_notice %}
+<div class="card" style="margin-top: 18px;">
+  <div class="alert {{ action_notice_level if action_notice_level in ['ok', 'warn'] else 'ok' }}">
+    <strong>{{ action_notice }}</strong>
+  </div>
+</div>
+{% endif %}
+
 <div class="grid cols-4" style="margin-top: 18px;">
   <div class="card"><div class="muted">Effective Tier</div><div style="font-size: 28px; font-weight: 800; margin-top: 8px;">{{ app_item.effective_tier.value }}</div></div>
-  <div class="card"><div class="muted">Last Known Players</div><div style="font-size: 28px; font-weight: 800; margin-top: 8px;">{{ app_item.last_known_players or '-' }}</div></div>
-  <div class="card"><div class="muted">24h High</div><div style="font-size: 28px; font-weight: 800; margin-top: 8px;">{{ app_item.latest_24h_high or '-' }}</div></div>
-  <div class="card"><div class="muted">24h Low</div><div style="font-size: 28px; font-weight: 800; margin-top: 8px;">{{ app_item.latest_24h_low or '-' }}</div></div>
+  <div class="card"><div class="muted">Current Players</div><div style="font-size: 28px; font-weight: 800; margin-top: 8px;">{{ app_item.last_known_players | comma_number }}</div></div>
+  <div class="card">
+    <div class="muted">All-Time Peak</div>
+    <div style="font-size: 28px; font-weight: 800; margin-top: 8px;">{{ app_item.all_time_peak_players | comma_number }}</div>
+  </div>
+  <div class="card"><div class="muted">24h High</div><div style="font-size: 28px; font-weight: 800; margin-top: 8px;">{{ app_item.latest_24h_high | comma_number }}</div></div>
+  <div class="card"><div class="muted">24h Low</div><div style="font-size: 28px; font-weight: 800; margin-top: 8px;">{{ app_item.latest_24h_low | comma_number }}</div></div>
 </div>
 
 <div class="card" style="margin-top: 18px;">
-  <h2 style="margin-top: 0;">Hourly 24h High / Low</h2>
+  <div class="toolbar" style="justify-content: space-between; align-items: flex-start; margin-bottom: 14px;">
+    <div>
+      <h2 style="margin: 0;">Hourly Player Count</h2>
+      <div class="muted" style="margin-top: 6px;">Current players over time. Summary cards above show the rolling 24-hour high and low.</div>
+    </div>
+    <div class="toolbar">
+      {% for option in window_options %}
+      {% if option.enabled %}
+      <a class="chip-link {% if option.active %}active{% endif %}" href="/admin/apps/{{ app_item.steam_app_id }}?window={{ option.value }}">{{ option.value }}</a>
+      {% else %}
+      <span class="chip-link disabled" title="Waiting for more history">{{ option.value }}</span>
+      {% endif %}
+      {% endfor %}
+    </div>
+  </div>
   {{ history_svg | safe }}
+  <div class="chart-meta-row" style="margin-top: 14px;">
+    <div class="chart-legend" aria-label="Chart legend">
+      <div class="legend-item">
+        <span class="legend-swatch current"></span>
+        <span>current players</span>
+      </div>
+    </div>
+    <div class="muted">Latest window end: {{ latest_window_end }}</div>
+  </div>
 </div>
 
 <div class="card" style="margin-top: 18px;">
@@ -49,7 +90,7 @@
       {% for sample in samples %}
       <tr>
         <td>{{ sample.sampled_at }}</td>
-        <td>{{ sample.concurrent_players }}</td>
+        <td>{{ sample.concurrent_players | comma_number }}</td>
         <td>{{ sample.provider }}</td>
       </tr>
       {% else %}
@@ -78,10 +119,10 @@
       <tr>
         <td>{{ point.bucket_started_at }}</td>
         <td>{{ point.window_ending_at }}</td>
-        <td>{{ point.observed_24h_high }}</td>
-        <td>{{ point.observed_24h_low }}</td>
-        <td>{{ point.latest_players }}</td>
-        <td>{{ point.sample_count }}</td>
+        <td>{{ point.observed_24h_high | comma_number }}</td>
+        <td>{{ point.observed_24h_low | comma_number }}</td>
+        <td>{{ point.latest_players | comma_number }}</td>
+        <td>{{ point.sample_count | comma_number }}</td>
         <td>{{ point.effective_tier_at_capture.value }}</td>
       </tr>
       {% else %}

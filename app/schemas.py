@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date, datetime
 from typing import Optional
 
 from pydantic import BaseModel, ConfigDict
@@ -14,6 +14,7 @@ class TrackedAppRead(BaseModel):
     id: int
     source_game_public_id: Optional[str] = None
     source_game_id: Optional[int] = None
+    source_release_date: Optional[date] = None
     steam_app_id: int
     title: str
     is_active: bool
@@ -25,6 +26,8 @@ class TrackedAppRead(BaseModel):
     last_success_at: Optional[datetime] = None
     last_error: Optional[str] = None
     last_known_players: Optional[int] = None
+    all_time_peak_players: Optional[int] = None
+    all_time_peak_at: Optional[datetime] = None
     latest_24h_high: Optional[int] = None
     latest_24h_low: Optional[int] = None
 
