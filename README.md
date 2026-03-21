@@ -29,6 +29,96 @@ source venv/bin/activate
 make run-worker
 ```
 
+`make run-worker` is still the original long-running local worker. It starts APScheduler and keeps running on your machine until you stop it.
+
+If you want to locally simulate the GitHub Actions path, run one short cycle instead:
+
+```bash
+source venv/bin/activate
+make run-worker-once
+```
+
+## Render deployment
+
+This repo includes a Render Blueprint in [render.yaml](/Users/lindbergbrandon/player-count-scraper/render.yaml) that creates:
+
+- one FastAPI web service
+- one managed Postgres database
+
+The Blueprint also:
+
+- runs `alembic upgrade head` before each web deploy
+- uses `/health` as the web health check
+- disables preview environments to avoid extra spend
+- normalizes Render Postgres URLs to `postgresql+asyncpg://...` at runtime
+
+### Required values during Blueprint creation
+
+Render will prompt you for these values when you create the Blueprint:
+
+- `SOURCE_API_BASE_URL`
+- `SERVICE_API_TOKEN`
+- `ADMIN_USERNAME`
+- `ADMIN_PASSWORD`
+
+### Optional production values
+
+Add these manually in the Render dashboard if your environment needs them:
+
+- `SOURCE_API_TOKEN`
+- `MIRROR_DATABASE_URL`
+- `MIRROR_DATABASE_USE_SSL=true`
+
+### Deploy flow
+
+1. Push this repo to GitHub.
+2. In Render, create a new Blueprint and point it at this repo.
+3. Fill in the prompted secrets above.
+4. Deploy the Blueprint.
+
+After the first deploy, the API will connect to the Render Postgres instance via `DATABASE_URL`.
+
+## GitHub Actions worker
+
+The long-running worker is set up to run from GitHub Actions instead of Render so you do not pay Render for a background worker.
+
+This repo includes [worker.yml](/Users/lindbergbrandon/player-count-scraper/.github/workflows/worker.yml), which runs a one-shot worker cycle every 5 minutes and can also be triggered manually.
+
+This does not replace the original local worker:
+
+- local development: `make run-worker`
+- GitHub-hosted scheduled cycle: `make run-worker-once` / `.github/workflows/worker.yml`
+
+### Why this shape
+
+GitHub-hosted runners are free for public repositories on standard runners, but they are not a good fit for a permanently running daemon:
+
+- scheduled workflows can run no more often than every 5 minutes
+- scheduled workflows run only from the default branch
+- each GitHub-hosted job has a 6 hour execution limit
+
+Because of that, the workflow runs short scheduled cycles instead of `python -m app.worker` as a forever process.
+
+### GitHub repository settings
+
+Set these before enabling the workflow:
+
+- Repository secret `DATABASE_URL`
+  Use your Render Postgres external URL. The workflow normalizes `postgresql://...` to `postgresql+asyncpg://...` automatically.
+- Repository variable `SOURCE_API_BASE_URL`
+  This should point at the upstream backend that exposes `/api/v1/games`.
+
+Optional GitHub settings:
+
+- Repository secret `SOURCE_API_TOKEN`
+- Repository secret `MIRROR_DATABASE_URL`
+- Repository variable `MIRROR_DATABASE_USE_SSL=true`
+
+### Notes
+
+- If your default branch on GitHub is `master`, scheduled workflows will run from `master`.
+- In public repositories, GitHub may automatically disable scheduled workflows after 60 days of no repository activity.
+
 ## Main DB mirror
 
 If you want successful scraper polls mirrored into the main backend database, set these in the scraper `.env`:

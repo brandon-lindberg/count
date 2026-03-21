@@ -2,13 +2,16 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from collections.abc import Awaitable, Callable
+from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from app.config import get_settings
 from app.database import SessionLocal
-from app.models import Tier, TrackedApp
+from app.models import JobRun, Tier, TrackedApp
 from app.services.job_runs import complete_job_run, start_job_run
 from app.services.partitions import ensure_future_partitions
 from app.services.polling import (
@@ -23,6 +26,13 @@ from app.services.steam_provider import SteamAppNotFoundError, SteamCurrentPlaye
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 settings = get_settings()
+
+
+@dataclass(slots=True)
+class ScheduledJobDefinition:
+    job_name: str
+    interval_minutes: int
+    runner: Callable[[], Awaitable[object]]
 
 
 async def record_job(job_name: str, processed: int, success: int, failure: int, error: str | None = None) -> None:
@@ -167,6 +177,65 @@ async def bootstrap() -> None:
     async with SessionLocal() as session:
         await ensure_future_partitions(session, settings.partition_months_ahead)
         await session.commit()
+
+
+def is_scheduled_job_due(
+    last_started_at: datetime | None,
+    interval_minutes: int,
+    now: datetime,
+) -> bool:
+    if last_started_at is None:
+        return True
+    return last_started_at <= now - timedelta(minutes=interval_minutes)
+
+
+def build_scheduled_job_definitions() -> list[ScheduledJobDefinition]:
+    return [
+        ScheduledJobDefinition("import_registry", settings.registry_import_minutes, import_registry_job),
+        ScheduledJobDefinition("bootstrap_poll", settings.bootstrap_poll_minutes, bootstrap_poll_job),
+        ScheduledJobDefinition("launch_watch_poll", settings.bootstrap_poll_minutes, launch_watch_poll_job),
+        ScheduledJobDefinition("poll_hot", settings.hot_poll_minutes, lambda: poll_tier_job(Tier.hot)),
+        ScheduledJobDefinition("poll_warm", settings.warm_poll_minutes, lambda: poll_tier_job(Tier.warm)),
+        ScheduledJobDefinition("poll_cold", settings.cold_poll_minutes, lambda: poll_tier_job(Tier.cold)),
+    ]
+
+
+async def _latest_job_started_at(job_name: str) -> datetime | None:
+    async with SessionLocal() as session:
+        return await session.scalar(select(func.max(JobRun.started_at)).where(JobRun.job_name == job_name))
+
+
+async def maybe_run_scheduled_job(
+    definition: ScheduledJobDefinition,
+    *,
+    now: datetime | None = None,
+    force: bool = False,
+) -> bool:
+    effective_now = now or datetime.now(timezone.utc)
+    if not force:
+        last_started_at = await _latest_job_started_at(definition.job_name)
+        if not is_scheduled_job_due(last_started_at, definition.interval_minutes, effective_now):
+            logger.info(
+                "Skipping %s; next run not due yet",
+                definition.job_name,
+            )
+            return False
+
+    logger.info("Running scheduled job %s", definition.job_name)
+    await definition.runner()
+    return True
+
+
+async def run_due_jobs_once(*, force_all: bool = False, now: datetime | None = None) -> list[str]:
+    await bootstrap()
+    executed: list[str] = []
+
+    for definition in build_scheduled_job_definitions():
+        if await maybe_run_scheduled_job(definition, now=now, force=force_all):
+            executed.append(definition.job_name)
+
+    logger.info("One-shot worker cycle finished. Jobs run: %s", ", ".join(executed) if executed else "none")
+    return executed
 
 
 async def startup_sync() -> None:

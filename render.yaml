@@ -1,11 +1,43 @@
+previews:
+  generation: off
+
+envVarGroups:
+  - name: player-count-scraper-shared
+    envVars:
+      - key: APP_NAME
+        value: Steam Player Count Scraper
+      - key: ENVIRONMENT
+        value: production
+      - key: DEBUG
+        value: "false"
+      - key: DATABASE_ECHO
+        value: "false"
+
+databases:
+  - name: player-count-scraper-db
+    plan: basic-256mb
+
 services:
   - type: web
     name: player-count-scraper-api
     runtime: python
     buildCommand: pip install -r requirements.txt
-    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
-  - type: worker
-    name: player-count-scraper-worker
-    runtime: python
-    buildCommand: pip install -r requirements.txt
-    startCommand: python -m app.worker
+    preDeployCommand: bash ./scripts/with_asyncpg_env.sh alembic upgrade head
+    startCommand: bash ./scripts/with_asyncpg_env.sh uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /health
+    envVars:
+      - fromGroup: player-count-scraper-shared
+      - key: DATABASE_URL
+        fromDatabase:
+          name: player-count-scraper-db
+          property: connectionString
+      - key: SOURCE_API_BASE_URL
+        sync: false
+      - key: SERVICE_API_TOKEN
+        sync: false
+      - key: ADMIN_USERNAME
+        sync: false
+      - key: ADMIN_PASSWORD
+        sync: false
+      - key: DISABLE_AUTH
+        value: "false"

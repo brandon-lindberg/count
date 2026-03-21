@@ -1,0 +1,57 @@
+name: Worker
+
+on:
+  schedule:
+    - cron: "3/5 * * * *"
+  workflow_dispatch:
+    inputs:
+      force_all:
+        description: Run every scheduled job regardless of interval state
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+concurrency:
+  group: player-count-scraper-worker
+  cancel-in-progress: false
+
+jobs:
+  run-worker-cycle:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      APP_NAME: Steam Player Count Scraper
+      ENVIRONMENT: production
+      DEBUG: "false"
+      DATABASE_ECHO: "false"
+      DATABASE_URL: ${{ secrets.DATABASE_URL }}
+      SOURCE_API_BASE_URL: ${{ vars.SOURCE_API_BASE_URL }}
+      SOURCE_API_TOKEN: ${{ secrets.SOURCE_API_TOKEN }}
+      MIRROR_DATABASE_URL: ${{ secrets.MIRROR_DATABASE_URL }}
+      MIRROR_DATABASE_USE_SSL: ${{ vars.MIRROR_DATABASE_USE_SSL || 'false' }}
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Validate required settings
+        run: |
+          test -n "$DATABASE_URL" || { echo "DATABASE_URL secret is required"; exit 1; }
+          test -n "$SOURCE_API_BASE_URL" || { echo "SOURCE_API_BASE_URL repo variable is required"; exit 1; }
+
+      - name: Run worker cycle
+        run: |
+          ARGS=""
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ "${{ inputs.force_all }}" = "true" ]; then
+            ARGS="--force-all"
+          fi
+          bash ./scripts/with_asyncpg_env.sh python -m app.run_scheduled_jobs $ARGS
