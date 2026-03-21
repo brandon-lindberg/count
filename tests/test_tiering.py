@@ -2,7 +2,14 @@ from datetime import date, datetime, timezone
 from types import SimpleNamespace
 
 from app.models import Tier
-from app.services.tiering import compute_auto_tier, is_release_hot_window, poll_interval_minutes, resolve_effective_tier
+from app.services.tiering import (
+    apply_recent_release_warm_floor,
+    compute_auto_tier,
+    is_recent_release_warm_floor_window,
+    is_release_hot_window,
+    poll_interval_minutes,
+    resolve_effective_tier,
+)
 
 
 def _settings() -> SimpleNamespace:
@@ -13,6 +20,7 @@ def _settings() -> SimpleNamespace:
         warm_poll_minutes=60,
         cold_poll_minutes=360,
         release_hot_days=3,
+        warm_floor_months=15,
     )
 
 
@@ -47,3 +55,28 @@ def test_is_release_hot_window_only_for_first_three_days_after_release() -> None
     assert is_release_hot_window(date(2026, 3, 17), settings, now) is True
     assert is_release_hot_window(date(2026, 3, 16), settings, now) is False
     assert is_release_hot_window(date(2026, 3, 20), settings, now) is False
+
+
+def test_is_recent_release_warm_floor_window_keeps_first_fifteen_months_warm() -> None:
+    settings = _settings()
+
+    assert is_recent_release_warm_floor_window(date(2025, 1, 15), settings, datetime(2026, 4, 14, 8, 0, tzinfo=timezone.utc)) is True
+    assert is_recent_release_warm_floor_window(date(2025, 1, 15), settings, datetime(2026, 4, 15, 8, 0, tzinfo=timezone.utc)) is False
+
+
+def test_is_recent_release_warm_floor_window_rejects_missing_or_upcoming_dates() -> None:
+    settings = _settings()
+    now = datetime(2026, 3, 19, 8, 0, tzinfo=timezone.utc)
+
+    assert is_recent_release_warm_floor_window(None, settings, now) is False
+    assert is_recent_release_warm_floor_window(date(2026, 3, 20), settings, now) is False
+
+
+def test_apply_recent_release_warm_floor_promotes_only_cold_recent_games() -> None:
+    settings = _settings()
+    now = datetime(2026, 3, 20, 8, 0, tzinfo=timezone.utc)
+
+    assert apply_recent_release_warm_floor(Tier.cold, date(2025, 1, 1), settings, now) == Tier.warm
+    assert apply_recent_release_warm_floor(Tier.cold, date(2024, 1, 1), settings, now) == Tier.cold
+    assert apply_recent_release_warm_floor(Tier.hot, date(2025, 1, 1), settings, now) == Tier.hot
+    assert apply_recent_release_warm_floor(Tier.warm, date(2025, 1, 1), settings, now) == Tier.warm

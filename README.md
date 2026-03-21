@@ -205,3 +205,4 @@ The admin app detail page includes a `Backfill Main DB` button for one-game back
 - Upcoming and newly released games are placed in a launch-watch queue that polls on a short interval even before they have a stable tier.
 - Steam `404` responses for launch-watch titles are retried quickly instead of waiting 24 hours, which avoids missing day-one launches.
 - Newly released games are forced into the `hot` tier for the first 3 days after their backend `release_date`, then fall back to threshold-based tiering automatically.
+- Games released within the last 15 months keep a `warm` minimum tier even when their player counts would otherwise place them in `cold`.

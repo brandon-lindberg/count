@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from calendar import monthrange
 from datetime import date, datetime, timedelta, timezone
 
 from sqlalchemy import func, select
@@ -35,6 +36,42 @@ def is_release_hot_window(
     return 0 <= days_since_release < settings.release_hot_days
 
 
+def _add_months(value: date, months: int) -> date:
+    month_index = value.month - 1 + months
+    year = value.year + month_index // 12
+    month = month_index % 12 + 1
+    day = min(value.day, monthrange(year, month)[1])
+    return date(year, month, day)
+
+
+def is_recent_release_warm_floor_window(
+    source_release_date: date | None,
+    settings: Settings,
+    now: datetime | None = None,
+) -> bool:
+    if source_release_date is None:
+        return False
+
+    effective_date = (now or datetime.now(timezone.utc)).astimezone(timezone.utc).date()
+    if effective_date < source_release_date:
+        return False
+
+    return effective_date < _add_months(source_release_date, settings.warm_floor_months)
+
+
+def apply_recent_release_warm_floor(
+    auto_tier: Tier,
+    source_release_date: date | None,
+    settings: Settings,
+    now: datetime | None = None,
+) -> Tier:
+    if auto_tier != Tier.cold:
+        return auto_tier
+    if is_recent_release_warm_floor_window(source_release_date, settings, now):
+        return Tier.warm
+    return auto_tier
+
+
 def poll_interval_minutes(tier: Tier, settings: Settings) -> int:
     if tier == Tier.hot:
         return settings.hot_poll_minutes
@@ -65,5 +102,10 @@ async def refresh_effective_tier(
         )
     )
     max_players = result.scalar_one_or_none()
-    tracked_app.effective_tier = compute_auto_tier(int(max_players) if max_players is not None else None, settings)
+    tracked_app.effective_tier = apply_recent_release_warm_floor(
+        compute_auto_tier(int(max_players) if max_players is not None else None, settings),
+        tracked_app.source_release_date,
+        settings,
+        now,
+    )
     return tracked_app.effective_tier

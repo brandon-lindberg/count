@@ -35,6 +35,7 @@ class Settings(BaseSettings):
     registry_import_hours: int | None = None
     registry_import_minutes: int = 15
     release_hot_days: int = 3
+    warm_floor_months: int = 15
     hot_threshold: int = 10000
     warm_threshold: int = 500
     poll_batch_limit: int = 250
