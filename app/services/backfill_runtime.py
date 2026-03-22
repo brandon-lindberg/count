@@ -12,6 +12,14 @@ from app.services.job_runs import complete_job_run, start_job_run
 from app.services.main_db_mirror import MirrorBackfillStats, mirror_is_configured
 
 
+def _normalize_timestamp(value: datetime | None) -> datetime | None:
+    if value is None:
+        return None
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc)
+
+
 def _format_duration(seconds: float | None) -> str:
     if seconds is None:
         return "-"
@@ -71,6 +79,8 @@ class DashboardBackfillStatus:
             eta_seconds = avg_per_app * (self.total_apps - self.processed_apps)
 
         percent_complete = (self.processed_apps / self.total_apps * 100.0) if self.total_apps > 0 else 0.0
+        started_at = _normalize_timestamp(self.started_at)
+        finished_at = _normalize_timestamp(self.finished_at)
         payload = asdict(self)
         payload.update(
             {
@@ -79,12 +89,10 @@ class DashboardBackfillStatus:
                 "eta_seconds": eta_seconds,
                 "elapsed_label": _format_duration(elapsed_seconds),
                 "eta_label": _format_duration(eta_seconds),
-                "started_at_label": self.started_at.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
-                if self.started_at
-                else "-",
-                "finished_at_label": self.finished_at.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
-                if self.finished_at
-                else "-",
+                "started_at_iso": started_at.isoformat(timespec="seconds") if started_at else "",
+                "finished_at_iso": finished_at.isoformat(timespec="seconds") if finished_at else "",
+                "started_at_label": started_at.strftime("%Y-%m-%d %H:%M UTC") if started_at else "-",
+                "finished_at_label": finished_at.strftime("%Y-%m-%d %H:%M UTC") if finished_at else "-",
             }
         )
         return payload

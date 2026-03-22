@@ -292,7 +292,83 @@
         <a href="/admin/apps">Tracked Apps</a>
         <a href="/admin/health">Health</a>
       </nav>
+      <div class="muted" id="local-timezone-note" style="margin-bottom: 18px;" hidden></div>
       {% block content %}{% endblock %}
     </div>
+    <script>
+      (() => {
+        function pad(value) {
+          return String(value).padStart(2, '0');
+        }
+
+        function resolveUserTimeZone() {
+          return Intl.DateTimeFormat().resolvedOptions().timeZone || '';
+        }
+
+        function parseUtcTimestamp(value) {
+          if (!value) return null;
+          const parsed = new Date(value);
+          if (Number.isNaN(parsed.getTime())) return null;
+          return parsed;
+        }
+
+        function formatUtcTimestamp(value) {
+          const parsed = parseUtcTimestamp(value);
+          if (!parsed) return '-';
+
+          return [
+            `${parsed.getFullYear()}-${pad(parsed.getMonth() + 1)}-${pad(parsed.getDate())}`,
+            `${pad(parsed.getHours())}:${pad(parsed.getMinutes())}`,
+          ].join(' ');
+        }
+
+        function renderDatetimeNode(node) {
+          if (!node) return;
+          const value = node.getAttribute('datetime') || node.dataset.utc || '';
+          const formatted = formatUtcTimestamp(value);
+          const timeZone = resolveUserTimeZone();
+          node.textContent = formatted;
+          node.title = timeZone ? `${formatted} ${timeZone}` : formatted;
+        }
+
+        function renderLocalDatetimes(root = document) {
+          root.querySelectorAll('[data-local-datetime]').forEach(renderDatetimeNode);
+        }
+
+        function renderTimeZoneNote(root = document) {
+          const note = document.getElementById('local-timezone-note');
+          if (!note) return;
+
+          const hasDatetime = Boolean(root.querySelector('[data-local-datetime]'));
+          const timeZone = resolveUserTimeZone();
+          if (!hasDatetime || !timeZone) {
+            note.hidden = true;
+            note.textContent = '';
+            return;
+          }
+
+          note.textContent = `Times shown in local time (${timeZone}).`;
+          note.hidden = false;
+        }
+
+        window.AdminTime = {
+          formatUtcTimestamp,
+          resolveUserTimeZone,
+          renderDatetimeNode,
+          renderLocalDatetimes,
+          renderTimeZoneNote,
+        };
+
+        if (document.readyState === 'loading') {
+          document.addEventListener('DOMContentLoaded', () => {
+            renderLocalDatetimes();
+            renderTimeZoneNote();
+          });
+        } else {
+          renderLocalDatetimes();
+          renderTimeZoneNote();
+        }
+      })();
+    </script>
   </body>
 </html>

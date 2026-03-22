@@ -72,7 +72,10 @@
         <span>current players</span>
       </div>
     </div>
-    <div class="muted">Latest window end: {{ latest_window_end }}</div>
+    <div class="muted">
+      Latest window end:
+      <time data-local-datetime="true" datetime="{{ latest_window_end | datetime_iso }}">{{ latest_window_end | admin_datetime }}</time>
+    </div>
   </div>
 </div>
 
@@ -89,7 +92,9 @@
     <tbody>
       {% for sample in samples %}
       <tr>
-        <td>{{ sample.sampled_at }}</td>
+        <td>
+          <time data-local-datetime="true" datetime="{{ sample.sampled_at | datetime_iso }}">{{ sample.sampled_at | admin_datetime }}</time>
+        </td>
         <td>{{ sample.concurrent_players | comma_number }}</td>
         <td>{{ sample.provider }}</td>
       </tr>
@@ -117,8 +122,12 @@
     <tbody>
       {% for point in history_points|reverse %}
       <tr>
-        <td>{{ point.bucket_started_at }}</td>
-        <td>{{ point.window_ending_at }}</td>
+        <td>
+          <time data-local-datetime="true" datetime="{{ point.bucket_started_at | datetime_iso }}">{{ point.bucket_started_at | admin_datetime }}</time>
+        </td>
+        <td>
+          <time data-local-datetime="true" datetime="{{ point.window_ending_at | datetime_iso }}">{{ point.window_ending_at | admin_datetime }}</time>
+        </td>
         <td>{{ point.observed_24h_high | comma_number }}</td>
         <td>{{ point.observed_24h_low | comma_number }}</td>
         <td>{{ point.latest_players | comma_number }}</td>

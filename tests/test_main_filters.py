@@ -6,6 +6,8 @@ from fastapi import HTTPException
 from app.main import (
     _build_page_numbers,
     _build_url_with_query,
+    _format_admin_datetime,
+    _format_admin_datetime_iso,
     _format_admin_number,
     _parse_app_sort,
     _parse_optional_bool,
@@ -56,6 +58,18 @@ def test_format_admin_number_adds_commas_and_keeps_zero() -> None:
     assert _format_admin_number(None) == "-"
     assert _format_admin_number(0) == "0"
     assert _format_admin_number(1393376) == "1,393,376"
+
+
+def test_format_admin_datetime_normalizes_to_utc() -> None:
+    value = datetime(2026, 3, 22, 10, 6, tzinfo=timezone.utc)
+
+    assert _format_admin_datetime(value) == "2026-03-22 10:06 UTC"
+
+
+def test_format_admin_datetime_iso_converts_offset_to_utc() -> None:
+    value = datetime.fromisoformat("2026-03-22T19:06:00+09:00")
+
+    assert _format_admin_datetime_iso(value) == "2026-03-22T10:06:00+00:00"
 
 
 def test_build_page_numbers_adds_ellipses_for_large_result_sets() -> None:

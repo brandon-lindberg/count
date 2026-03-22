@@ -96,8 +96,14 @@
       Current app: -
       {% endif %}
     </span>
-    <span id="backfill-started">Started {{ backfill_status.started_at_label }}</span>
-    <span id="backfill-finished">Finished {{ backfill_status.finished_at_label }}</span>
+    <span id="backfill-started">
+      Started
+      <time id="backfill-started-time" data-local-datetime="true" datetime="{{ backfill_status.started_at_iso }}">{{ backfill_status.started_at_label }}</time>
+    </span>
+    <span id="backfill-finished">
+      Finished
+      <time id="backfill-finished-time" data-local-datetime="true" datetime="{{ backfill_status.finished_at_iso }}">{{ backfill_status.finished_at_label }}</time>
+    </span>
   </div>
 
   <div class="muted" id="backfill-error">
@@ -157,8 +163,12 @@
         <tr>
           <td>{{ job.job_label }}</td>
           <td><span class="status {{ job.status }}">{{ job.status }}</span></td>
-          <td>{{ job.started_at }}</td>
-          <td>{{ job.finished_at }}</td>
+          <td>
+            <time data-local-datetime="true" datetime="{{ job.started_at | datetime_iso }}">{{ job.started_at | admin_datetime }}</time>
+          </td>
+          <td>
+            <time data-local-datetime="true" datetime="{{ job.finished_at | datetime_iso }}">{{ job.finished_at | admin_datetime }}</time>
+          </td>
           <td>{{ job.processed_count | comma_number }}</td>
           <td>{{ job.success_count | comma_number }}</td>
           <td>{{ job.failure_count | comma_number }}</td>
@@ -202,6 +212,18 @@
       if (element) element.textContent = value;
     }
 
+    function setDatetime(id, value, fallbackLabel) {
+      const element = document.getElementById(id);
+      if (!element) return;
+
+      element.setAttribute('datetime', value || '');
+      if (window.AdminTime && typeof window.AdminTime.renderDatetimeNode === 'function') {
+        window.AdminTime.renderDatetimeNode(element);
+        return;
+      }
+      element.textContent = fallbackLabel || '-';
+    }
+
     function updateStatus(payload) {
       const fill = document.getElementById('backfill-fill');
       if (fill) fill.style.width = `${payload.percent_complete.toFixed(1)}%`;
@@ -223,8 +245,8 @@
           ? `Current app: ${payload.current_title} (${payload.current_steam_app_id})`
           : 'Current app: -'
       );
-      setText('backfill-started', `Started ${payload.started_at_label}`);
-      setText('backfill-finished', `Finished ${payload.finished_at_label}`);
+      setDatetime('backfill-started-time', payload.started_at_iso, payload.started_at_label);
+      setDatetime('backfill-finished-time', payload.finished_at_iso, payload.finished_at_label);
       setText('backfill-error', payload.last_error ? `Last error: ${payload.last_error}` : '');
 
       const state = document.getElementById('backfill-state');

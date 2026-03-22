@@ -64,7 +64,9 @@
         <td>{{ item.last_known_players | comma_number }}</td>
         <td>{{ item.latest_24h_high | comma_number }}</td>
         <td>{{ item.latest_24h_low | comma_number }}</td>
-        <td>{{ item.last_success_at or '-' }}</td>
+        <td>
+          <time data-local-datetime="true" datetime="{{ item.last_success_at | datetime_iso }}">{{ item.last_success_at | admin_datetime }}</time>
+        </td>
         <td><a class="table-action" href="/admin/apps/{{ item.steam_app_id }}">View Chart</a></td>
       </tr>
       {% else %}

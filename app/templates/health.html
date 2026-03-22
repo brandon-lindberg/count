@@ -48,8 +48,12 @@
         <tr>
           <td>{{ item.job_label }}</td>
           <td><span class="status {{ item.status }}">{{ item.status }}</span></td>
-          <td>{{ item.last_run }}</td>
-          <td>{{ item.last_success }}</td>
+          <td>
+            <time data-local-datetime="true" datetime="{{ item.last_run | datetime_iso }}">{{ item.last_run | admin_datetime }}</time>
+          </td>
+          <td>
+            <time data-local-datetime="true" datetime="{{ item.last_success | datetime_iso }}">{{ item.last_success | admin_datetime }}</time>
+          </td>
           <td class="muted">{{ item.notes }}</td>
         </tr>
         {% endfor %}

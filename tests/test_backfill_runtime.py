@@ -36,3 +36,5 @@ def test_dashboard_backfill_status_snapshot_reports_progress_fields() -> None:
     assert snapshot["apps_skipped_already_mirrored"] == 3
     assert snapshot["current_title"] == "Dota 2"
     assert snapshot["elapsed_label"] != "-"
+    assert snapshot["started_at_iso"].endswith("+00:00")
+    assert snapshot["finished_at_iso"] == ""

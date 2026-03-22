@@ -154,10 +154,26 @@ def _build_url_with_query(path: str, params: dict[str, object]) -> str:
     return f"{path}?{query}" if query else path
 
 
-def _format_admin_datetime(value: datetime | None) -> str:
+def _normalize_admin_datetime(value: datetime | None) -> datetime | None:
     if value is None:
+        return None
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc)
+
+
+def _format_admin_datetime(value: datetime | None) -> str:
+    normalized = _normalize_admin_datetime(value)
+    if normalized is None:
         return "-"
-    return value.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+    return normalized.strftime("%Y-%m-%d %H:%M UTC")
+
+
+def _format_admin_datetime_iso(value: datetime | None) -> str:
+    normalized = _normalize_admin_datetime(value)
+    if normalized is None:
+        return ""
+    return normalized.isoformat(timespec="seconds")
 
 
 def _format_admin_number(value: int | None) -> str:
@@ -248,8 +264,8 @@ def _build_dashboard_job_rows(recent_jobs: list[JobRun]) -> tuple[list[dict[str,
                 "job_name": job.job_name,
                 "job_label": _format_job_label(job.job_name),
                 "status": status,
-                "started_at": _format_admin_datetime(job.started_at),
-                "finished_at": _format_admin_datetime(job.finished_at),
+                "started_at": job.started_at,
+                "finished_at": job.finished_at,
                 "processed_count": job.processed_count,
                 "success_count": job.success_count,
                 "failure_count": job.failure_count,
@@ -284,9 +300,11 @@ def _redact_url_credentials(value: str | None) -> str:
 
 
 templates.env.filters["comma_number"] = _format_admin_number
+templates.env.filters["admin_datetime"] = _format_admin_datetime
+templates.env.filters["datetime_iso"] = _format_admin_datetime_iso
 
 
-def _build_latest_job_health_cards(recent_jobs: list[JobRun]) -> list[dict[str, str]]:
+def _build_latest_job_health_cards(recent_jobs: list[JobRun]) -> list[dict[str, object]]:
     latest_jobs: dict[str, JobRun] = {}
     latest_success_at: dict[str, datetime] = {}
 
@@ -297,7 +315,7 @@ def _build_latest_job_health_cards(recent_jobs: list[JobRun]) -> list[dict[str, 
             latest_success_at[job.job_name] = job.finished_at or job.started_at
 
     ordered_status_names = ["import_registry", "bootstrap_poll", "launch_watch_poll", "poll_hot", "poll_warm", "poll_cold"]
-    cards: list[dict[str, str]] = []
+    cards: list[dict[str, object]] = []
     for job_name in ordered_status_names:
         job = latest_jobs.get(job_name)
         if job is None:
@@ -305,8 +323,8 @@ def _build_latest_job_health_cards(recent_jobs: list[JobRun]) -> list[dict[str, 
                 {
                     "job_label": _format_job_label(job_name),
                     "status": "idle",
-                    "last_run": "-",
-                    "last_success": "-",
+                    "last_run": None,
+                    "last_success": None,
                     "notes": "No recorded runs yet.",
                 }
             )
@@ -318,8 +336,8 @@ def _build_latest_job_health_cards(recent_jobs: list[JobRun]) -> list[dict[str, 
             {
                 "job_label": _format_job_label(job_name),
                 "status": status,
-                "last_run": _format_admin_datetime(job.finished_at or job.started_at),
-                "last_success": _format_admin_datetime(latest_success_at.get(job_name)),
+                "last_run": job.finished_at or job.started_at,
+                "last_success": latest_success_at.get(job_name),
                 "notes": notes or "-",
             }
         )
@@ -743,7 +761,7 @@ async def admin_app_detail(
             "tier_options": [tier.value for tier in Tier],
             "window_options": window_options,
             "selected_window": selected_window,
-            "latest_window_end": _format_admin_datetime(history_points[-1].window_ending_at) if history_points else "-",
+            "latest_window_end": history_points[-1].window_ending_at if history_points else None,
             "mirror_configured": mirror_is_configured(settings),
             "action_notice": notice,
             "action_notice_level": notice_level or "ok",
