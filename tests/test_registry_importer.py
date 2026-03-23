@@ -90,6 +90,38 @@ def test_sync_existing_tracked_app_from_source_updates_backend_rows() -> None:
     assert tracked_app.effective_tier == Tier.warm
 
 
+def test_sync_existing_tracked_app_from_source_promotes_recent_cold_rows_to_warm_floor() -> None:
+    tracked_app = SimpleNamespace(
+        is_active=True,
+        import_source="backend_api",
+        title="Old Title",
+        source_game_id=10,
+        source_game_public_id="old-public-id",
+        source_release_date=date(2024, 1, 1),
+        manual_tier_override=None,
+        effective_tier=Tier.cold,
+        last_imported_at=None,
+    )
+    source_game = SourceGame(
+        source_game_id=30,
+        source_game_public_id="recent-public-id",
+        source_release_date=date(2025, 6, 1),
+        steam_app_id=123456,
+        title="Recent Game",
+    )
+
+    activated = sync_existing_tracked_app_from_source(
+        tracked_app,
+        source_game,
+        imported_at=datetime(2026, 3, 23, 3, 0, tzinfo=timezone.utc),
+        settings=Settings(),
+        now=datetime(2026, 3, 23, 3, 0, tzinfo=timezone.utc),
+    )
+
+    assert activated is False
+    assert tracked_app.effective_tier == Tier.warm
+
+
 def test_sync_existing_tracked_app_from_source_preserves_manual_rows() -> None:
     tracked_app = SimpleNamespace(
         is_active=True,

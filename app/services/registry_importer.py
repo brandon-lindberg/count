@@ -9,7 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import Settings
 from app.models import Tier, TrackedApp
-from app.services.tiering import is_release_hot_window
+from app.services.tiering import is_recent_release_warm_floor_window, is_release_hot_window
 
 
 @dataclass(slots=True)
@@ -99,6 +99,12 @@ def sync_existing_tracked_app_from_source(
         tracked_app.effective_tier = tracked_app.manual_tier_override
     elif is_release_hot_window(source_game.source_release_date, settings, now):
         tracked_app.effective_tier = Tier.hot
+    elif tracked_app.effective_tier == Tier.cold and is_recent_release_warm_floor_window(
+        source_game.source_release_date,
+        settings,
+        now,
+    ):
+        tracked_app.effective_tier = Tier.warm
 
     return activated
 
