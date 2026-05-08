@@ -31,7 +31,7 @@ class TrackedApp(Base):
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, server_default=text("true"))
     import_source: Mapped[str] = mapped_column(String(64), nullable=False, default="backend_api", server_default=text("'backend_api'"))
     manual_tier_override: Mapped[Optional[Tier]] = mapped_column(SqlEnum(Tier, name="tier_enum", native_enum=False))
-    effective_tier: Mapped[Tier] = mapped_column(SqlEnum(Tier, name="tier_enum", native_enum=False), nullable=False, default=Tier.warm, server_default=text("'warm'"))
+    effective_tier: Mapped[Tier] = mapped_column(SqlEnum(Tier, name="tier_enum", native_enum=False), nullable=False, default=Tier.cold, server_default=text("'cold'"))
     last_imported_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
     last_polled_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), index=True)
     last_success_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))

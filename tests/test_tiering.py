@@ -24,8 +24,8 @@ def _settings() -> SimpleNamespace:
     )
 
 
-def test_compute_auto_tier_defaults_to_warm_without_history() -> None:
-    assert compute_auto_tier(None, _settings()) == Tier.warm
+def test_compute_auto_tier_defaults_to_cold_without_history() -> None:
+    assert compute_auto_tier(None, _settings()) == Tier.cold
 
 
 def test_compute_auto_tier_uses_thresholds() -> None:

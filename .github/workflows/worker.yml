@@ -21,7 +21,7 @@ concurrency:
 jobs:
   run-worker-cycle:
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 45
     env:
       APP_NAME: Steam Player Count Scraper
       ENVIRONMENT: production

@@ -12,7 +12,7 @@ from app.models import PlayerSample, Tier, TrackedApp
 
 def compute_auto_tier(max_players: int | None, settings: Settings) -> Tier:
     if max_players is None:
-        return Tier.warm
+        return Tier.cold
     if max_players >= settings.hot_threshold:
         return Tier.hot
     if max_players >= settings.warm_threshold:

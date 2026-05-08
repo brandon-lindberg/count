@@ -115,6 +115,14 @@ def sync_existing_tracked_app_from_source(
     return activated
 
 
+def initial_effective_tier_for_source_game(source_release_date: date | None, settings: Settings, now: datetime) -> Tier:
+    if is_release_hot_window(source_release_date, settings, now):
+        return Tier.hot
+    if is_recent_release_warm_floor_window(source_release_date, settings, now):
+        return Tier.warm
+    return Tier.cold
+
+
 async def import_registry(session: AsyncSession, settings: Settings) -> RegistryImportStats:
     now = datetime.now(timezone.utc)
     stats = RegistryImportStats()
@@ -187,7 +195,7 @@ async def import_registry(session: AsyncSession, settings: Settings) -> Registry
                     select(TrackedApp).where(TrackedApp.steam_app_id == source_game.steam_app_id)
                 )
                 if tracked_app is None:
-                    initial_tier = Tier.hot if is_release_hot_window(source_game.source_release_date, settings, now) else Tier.warm
+                    initial_tier = initial_effective_tier_for_source_game(source_game.source_release_date, settings, now)
                     tracked_app = TrackedApp(
                         source_game_id=source_game.source_game_id,
                         source_game_public_id=source_game.source_game_public_id,

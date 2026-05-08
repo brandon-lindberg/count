@@ -102,7 +102,7 @@ Because of that, the workflow runs short scheduled cycles instead of `python -m 
 
 The GitHub worker uses the same DB-backed due-job checks as the local worker. With the production defaults, hot games are eligible every 30 minutes, warm games every 60 minutes, and cold games every 180 minutes. The workflow itself wakes up every 30 minutes, so skipped jobs exit quickly when their tier is not due yet.
 
-To reduce timeout risk on GitHub-hosted runners (especially during throttled periods), the workflow also sets conservative per-cycle limits (`POLL_BATCH_LIMIT=150`, `BOOTSTRAP_BATCH_LIMIT=300`) and a 25-minute job timeout.
+To reduce timeout risk on GitHub-hosted runners (especially during throttled periods), the workflow also sets conservative per-cycle limits (`POLL_BATCH_LIMIT=150`, `BOOTSTRAP_BATCH_LIMIT=300`) and a 45-minute job timeout.
 The worker now also syncs Steam user score metadata (score, sample size, sentiment counts, review description) and mirrors those fields into the backend DB.
 For rollout safety, the GitHub worker currently disables cold-tier polling (`ENABLE_COLD_POLLING=false`) and only runs hot/warm tier polls.
 

@@ -7,6 +7,7 @@ from app.services.registry_importer import (
     SourceGame,
     build_source_games_url,
     extract_tracked_games,
+    initial_effective_tier_for_source_game,
     imported_at_for_source_position,
     sync_existing_tracked_app_from_source,
 )
@@ -159,3 +160,13 @@ def test_sync_existing_tracked_app_from_source_preserves_manual_rows() -> None:
     assert tracked_app.source_game_public_id == "be724651782747f6b4c6f992e34be774"
     assert tracked_app.source_release_date == date(2026, 2, 27)
     assert tracked_app.last_imported_at == imported_at
+
+
+def test_initial_effective_tier_for_source_game_defaults_to_cold_outside_release_windows() -> None:
+    settings = Settings()
+    now = datetime(2026, 5, 8, 0, 0, tzinfo=timezone.utc)
+
+    assert initial_effective_tier_for_source_game(None, settings, now) == Tier.cold
+    assert initial_effective_tier_for_source_game(date(2021, 1, 1), settings, now) == Tier.cold
+    assert initial_effective_tier_for_source_game(date(2026, 5, 7), settings, now) == Tier.hot
+    assert initial_effective_tier_for_source_game(date(2025, 7, 1), settings, now) == Tier.warm
