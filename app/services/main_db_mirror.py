@@ -109,24 +109,42 @@ async def get_mirror_session(settings: Settings | None = None) -> AsyncIterator[
 
 
 async def _resolve_game_id(session: AsyncSession, tracked_app: TrackedApp) -> int | None:
+    id_from_public: int | None = None
+    id_from_numeric: int | None = None
+
     if tracked_app.source_game_public_id:
         result = await session.execute(
             text("select id from games where public_id = :public_id"),
             {"public_id": tracked_app.source_game_public_id},
         )
-        game_id = result.scalar_one_or_none()
-        if game_id is not None:
-            return int(game_id)
+        row = result.scalar_one_or_none()
+        if row is not None:
+            id_from_public = int(row)
 
     if tracked_app.source_game_id is not None:
         result = await session.execute(
             text("select id from games where id = :game_id"),
             {"game_id": tracked_app.source_game_id},
         )
-        game_id = result.scalar_one_or_none()
-        if game_id is not None:
-            return int(game_id)
+        row = result.scalar_one_or_none()
+        if row is not None:
+            id_from_numeric = int(row)
 
+    if id_from_public is not None and id_from_numeric is not None and id_from_public != id_from_numeric:
+        logger.warning(
+            "Main DB mirror skipped for Steam app %s due to mapping mismatch: public_id=%s->%s but source_game_id=%s exists as %s",
+            tracked_app.steam_app_id,
+            tracked_app.source_game_public_id,
+            id_from_public,
+            tracked_app.source_game_id,
+            id_from_numeric,
+        )
+        return None
+
+    if id_from_public is not None:
+        return id_from_public
+    if id_from_numeric is not None:
+        return id_from_numeric
     return None
 
 
@@ -178,6 +196,8 @@ def _build_game_summary_params(
     latest_24h_low: int | None,
     all_time_peak_players: int | None,
     all_time_peak_at: datetime | None,
+    steam_user_score: object | None = None,
+    steam_sample_size: int | None = None,
 ) -> dict[str, object]:
     return {
         "game_id": game_id,
@@ -187,6 +207,8 @@ def _build_game_summary_params(
         "steam_player_24h_low_observed": latest_24h_low,
         "steam_player_all_time_peak": all_time_peak_players,
         "steam_player_all_time_peak_at": all_time_peak_at,
+        "steam_user_score": steam_user_score,
+        "steam_sample_size": steam_sample_size,
     }
 
 
@@ -276,11 +298,49 @@ async def _update_game_summary(session: AsyncSession, params: dict[str, object])
                 steam_player_24h_low_observed = :steam_player_24h_low_observed,
                 steam_player_all_time_peak = :steam_player_all_time_peak,
                 steam_player_all_time_peak_at = :steam_player_all_time_peak_at,
-                steam_player_stats_synced_at = :sampled_at
+                steam_player_stats_synced_at = :sampled_at,
+                steam_user_score = :steam_user_score,
+                steam_sample_size = :steam_sample_size
             where id = :game_id
             """
         ),
         params,
+    )
+
+
+async def _upsert_steam_user_score(
+    session: AsyncSession,
+    *,
+    game_id: int,
+    steam_user_score: object,
+    steam_score_raw: str,
+    steam_sample_size: int,
+    steam_positive_count: int,
+    steam_negative_count: int,
+    steam_review_score_desc: str,
+    scraped_at: datetime,
+) -> None:
+    await session.execute(
+        text(
+            """
+            insert into user_scores (
+                game_id, source, score, score_raw, sample_size, positive_count, negative_count, review_score_desc, scraped_at
+            )
+            values (
+                :game_id, 'steam', :score, :score_raw, :sample_size, :positive_count, :negative_count, :review_score_desc, :scraped_at
+            )
+            """
+        ),
+        {
+            "game_id": game_id,
+            "score": steam_user_score,
+            "score_raw": steam_score_raw,
+            "sample_size": steam_sample_size,
+            "positive_count": steam_positive_count,
+            "negative_count": steam_negative_count,
+            "review_score_desc": steam_review_score_desc,
+            "scraped_at": scraped_at,
+        },
     )
 
 
@@ -293,6 +353,13 @@ async def mirror_poll_to_main_db(
     latest_24h_low: int | None,
     all_time_peak_players: int | None,
     all_time_peak_at: datetime | None,
+    steam_user_score: object | None = None,
+    steam_score_raw: str | None = None,
+    steam_sample_size: int | None = None,
+    steam_positive_count: int | None = None,
+    steam_negative_count: int | None = None,
+    steam_review_score_desc: str | None = None,
+    steam_score_synced_at: datetime | None = None,
     settings: Settings | None = None,
 ) -> bool:
     effective_settings = settings or get_settings()
@@ -363,8 +430,31 @@ async def mirror_poll_to_main_db(
                 latest_24h_low=latest_24h_low,
                 all_time_peak_players=all_time_peak_players,
                 all_time_peak_at=all_time_peak_at,
+                steam_user_score=steam_user_score,
+                steam_sample_size=steam_sample_size,
             ),
         )
+
+        if (
+            steam_user_score is not None
+            and steam_score_raw
+            and steam_sample_size is not None
+            and steam_positive_count is not None
+            and steam_negative_count is not None
+            and steam_review_score_desc
+            and steam_score_synced_at is not None
+        ):
+            await _upsert_steam_user_score(
+                session,
+                game_id=game_id,
+                steam_user_score=steam_user_score,
+                steam_score_raw=steam_score_raw,
+                steam_sample_size=steam_sample_size,
+                steam_positive_count=steam_positive_count,
+                steam_negative_count=steam_negative_count,
+                steam_review_score_desc=steam_review_score_desc,
+                scraped_at=steam_score_synced_at,
+            )
 
     return True
 
@@ -459,8 +549,31 @@ async def backfill_tracked_app_to_main_db(
                 latest_24h_low=tracked_app.latest_24h_low,
                 all_time_peak_players=tracked_app.all_time_peak_players,
                 all_time_peak_at=tracked_app.all_time_peak_at,
+                steam_user_score=tracked_app.steam_user_score,
+                steam_sample_size=tracked_app.steam_sample_size,
             ),
         )
+
+        if (
+            tracked_app.steam_user_score is not None
+            and tracked_app.steam_score_raw
+            and tracked_app.steam_sample_size is not None
+            and tracked_app.steam_positive_count is not None
+            and tracked_app.steam_negative_count is not None
+            and tracked_app.steam_review_score_desc
+            and tracked_app.steam_score_synced_at is not None
+        ):
+            await _upsert_steam_user_score(
+                mirror_session,
+                game_id=game_id,
+                steam_user_score=tracked_app.steam_user_score,
+                steam_score_raw=tracked_app.steam_score_raw,
+                steam_sample_size=tracked_app.steam_sample_size,
+                steam_positive_count=tracked_app.steam_positive_count,
+                steam_negative_count=tracked_app.steam_negative_count,
+                steam_review_score_desc=tracked_app.steam_review_score_desc,
+                scraped_at=tracked_app.steam_score_synced_at,
+            )
 
     stats.apps_processed = 1
     stats.summaries_updated = 1

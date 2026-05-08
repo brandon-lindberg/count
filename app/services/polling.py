@@ -242,6 +242,7 @@ async def poll_app(
     try:
         await ensure_partition_for_timestamp(session, effective_sampled_at)
         concurrent_players = await provider.get_current_players(tracked_app.steam_app_id)
+        steam_score = await provider.get_user_score(tracked_app.steam_app_id)
         await upsert_player_sample(session, tracked_app, effective_sampled_at, concurrent_players)
 
         tracked_app.last_known_players = concurrent_players
@@ -249,6 +250,14 @@ async def poll_app(
         tracked_app.last_success_at = effective_sampled_at
         tracked_app.last_error = None
         update_all_time_peak(tracked_app, concurrent_players, effective_sampled_at)
+        if steam_score is not None:
+            tracked_app.steam_user_score = steam_score.score
+            tracked_app.steam_score_raw = steam_score.score_raw
+            tracked_app.steam_sample_size = steam_score.sample_size
+            tracked_app.steam_positive_count = steam_score.positive_count
+            tracked_app.steam_negative_count = steam_score.negative_count
+            tracked_app.steam_review_score_desc = steam_score.review_score_desc
+            tracked_app.steam_score_synced_at = steam_score.scraped_at
         # Flush the newly written sample before querying sample history for tiering and rollups.
         await session.flush()
         await refresh_effective_tier(session, tracked_app, settings, effective_sampled_at)
@@ -263,14 +272,23 @@ async def poll_app(
                 latest_24h_low=tracked_app.latest_24h_low,
                 all_time_peak_players=tracked_app.all_time_peak_players,
                 all_time_peak_at=tracked_app.all_time_peak_at,
+                steam_user_score=tracked_app.steam_user_score,
+                steam_score_raw=tracked_app.steam_score_raw,
+                steam_sample_size=tracked_app.steam_sample_size,
+                steam_positive_count=tracked_app.steam_positive_count,
+                steam_negative_count=tracked_app.steam_negative_count,
+                steam_review_score_desc=tracked_app.steam_review_score_desc,
+                steam_score_synced_at=tracked_app.steam_score_synced_at,
                 settings=settings,
             )
-        except Exception:
+        except Exception as mirror_exc:
             logger.exception(
                 "Main DB mirror failed for tracked app %s (Steam app %s)",
                 tracked_app.id,
                 tracked_app.steam_app_id,
             )
+            if settings.require_mirror_success:
+                raise mirror_exc
         return PollResult(
             steam_app_id=tracked_app.steam_app_id,
             concurrent_players=concurrent_players,

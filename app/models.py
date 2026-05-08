@@ -2,9 +2,10 @@ from __future__ import annotations
 
 from datetime import date, datetime
 from enum import Enum
+from decimal import Decimal
 from typing import Optional
 
-from sqlalchemy import BigInteger, Boolean, Date, DateTime, Enum as SqlEnum, ForeignKey, Index, Integer, String, Text, UniqueConstraint, func, text
+from sqlalchemy import BigInteger, Boolean, Date, DateTime, Enum as SqlEnum, ForeignKey, Index, Integer, Numeric, String, Text, UniqueConstraint, func, text
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 
@@ -40,6 +41,13 @@ class TrackedApp(Base):
     all_time_peak_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
     latest_24h_high: Mapped[Optional[int]] = mapped_column(Integer)
     latest_24h_low: Mapped[Optional[int]] = mapped_column(Integer)
+    steam_user_score: Mapped[Optional[Decimal]] = mapped_column(Numeric(5, 2))
+    steam_score_raw: Mapped[Optional[str]] = mapped_column(String(50))
+    steam_sample_size: Mapped[Optional[int]] = mapped_column(Integer)
+    steam_positive_count: Mapped[Optional[int]] = mapped_column(Integer)
+    steam_negative_count: Mapped[Optional[int]] = mapped_column(Integer)
+    steam_review_score_desc: Mapped[Optional[str]] = mapped_column(String(100))
+    steam_score_synced_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
 

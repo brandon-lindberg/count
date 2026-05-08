@@ -18,6 +18,7 @@ class Settings(BaseSettings):
     database_echo: bool = False
     mirror_database_url: str | None = None
     mirror_database_use_ssl: bool = False
+    require_mirror_success: bool = False
 
     source_api_base_url: str = 'http://localhost:8000'
     source_api_token: str | None = None
