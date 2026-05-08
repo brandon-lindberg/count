@@ -327,7 +327,7 @@ async def _upsert_steam_user_score(
                 game_id, source, score, score_raw, sample_size, positive_count, negative_count, review_score_desc, scraped_at
             )
             values (
-                :game_id, 'steam', :score, :score_raw, :sample_size, :positive_count, :negative_count, :review_score_desc, :scraped_at
+                :game_id, 'STEAM', :score, :score_raw, :sample_size, :positive_count, :negative_count, :review_score_desc, :scraped_at
             )
             """
         ),
