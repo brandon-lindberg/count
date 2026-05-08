@@ -19,7 +19,8 @@ concurrency:
 jobs:
   run-worker-test-cycle:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    # Keep in sync with poll batch math (2*bootstrap + hot + warm); test run imports only 2 API pages.
+    timeout-minutes: 25
     env:
       APP_NAME: Steam Player Count Scraper
       ENVIRONMENT: production
@@ -38,8 +39,8 @@ jobs:
       WARM_POLL_MINUTES: "60"
       COLD_POLL_MINUTES: "180"
       ENABLE_COLD_POLLING: "false"
-      POLL_BATCH_LIMIT: "150"
-      BOOTSTRAP_BATCH_LIMIT: "300"
+      POLL_BATCH_LIMIT: "80"
+      BOOTSTRAP_BATCH_LIMIT: "80"
     steps:
       - uses: actions/checkout@v5
 

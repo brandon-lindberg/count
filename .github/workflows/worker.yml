@@ -21,7 +21,10 @@ concurrency:
 jobs:
   run-worker-cycle:
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    # GitHub-hosted jobs can run up to 6h; this caps our run earlier so a bad cycle fails fast.
+    # Poll budget (worst case, all jobs run): 2*BOOTSTRAP_BATCH_LIMIT + POLL_BATCH_LIMIT (hot) + POLL_BATCH_LIMIT (warm) [+ cold if enabled].
+    # Example: 2*100+100+100=400 polls × ~5s ≈ 33 min, plus checkout/pip/registry — keep total under this timeout.
+    timeout-minutes: 60
     env:
       APP_NAME: Steam Player Count Scraper
       ENVIRONMENT: production
@@ -39,8 +42,10 @@ jobs:
       WARM_POLL_MINUTES: "60"
       COLD_POLL_MINUTES: "180"
       ENABLE_COLD_POLLING: "false"
-      POLL_BATCH_LIMIT: "150"
-      BOOTSTRAP_BATCH_LIMIT: "300"
+      # Smaller batches = more half-hourly cycles to drain the queue, but avoids job timeout.
+      # Warm ~2k apps: full rotation takes many runs regardless; hot ~100 fits easily in one batch.
+      POLL_BATCH_LIMIT: "100"
+      BOOTSTRAP_BATCH_LIMIT: "100"
     steps:
       - uses: actions/checkout@v5
 
