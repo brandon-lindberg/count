@@ -82,7 +82,7 @@ After the first deploy, the API will connect to the Render Postgres instance via
 
 The long-running worker is set up to run from GitHub Actions instead of Render so you do not pay Render for a background worker.
 
-This repo includes [worker.yml](/Users/lindbergbrandon/player-count-scraper/.github/workflows/worker.yml), which runs a one-shot worker cycle every 5 minutes and can also be triggered manually.
+This repo includes [worker.yml](/Users/lindbergbrandon/player-count-scraper/.github/workflows/worker.yml), which runs a one-shot worker cycle every 30 minutes and can also be triggered manually.
 
 This does not replace the original local worker:
 
@@ -99,6 +99,10 @@ GitHub-hosted runners are free for public repositories on standard runners, but 
 
 Because of that, the workflow runs short scheduled cycles instead of `python -m app.worker` as a forever process.
 
+The GitHub worker uses the same DB-backed due-job checks as the local worker. With the production defaults, hot games are eligible every 30 minutes, warm games every 60 minutes, and cold games every 180 minutes. The workflow itself wakes up every 30 minutes, so skipped jobs exit quickly when their tier is not due yet.
+
+To reduce timeout risk on GitHub-hosted runners (especially during throttled periods), the workflow also sets conservative per-cycle limits (`POLL_BATCH_LIMIT=150`, `BOOTSTRAP_BATCH_LIMIT=300`) and a 25-minute job timeout.
+
 ### GitHub repository settings
 
 Set these before enabling the workflow:
@@ -111,8 +115,11 @@ Set these before enabling the workflow:
 Optional GitHub settings:
 
 - Repository secret `SOURCE_API_TOKEN`
-- Repository secret `MIRROR_DATABASE_URL`
 - Repository variable `MIRROR_DATABASE_USE_SSL=true`
+
+Required for backend DB updates from GitHub worker:
+
+- Repository secret `MIRROR_DATABASE_URL`
 
 ### Notes
 

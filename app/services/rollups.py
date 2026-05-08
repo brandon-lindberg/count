@@ -1,14 +1,16 @@
 from __future__ import annotations
 
+import calendar
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import select
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import PlayerActivityHourly, PlayerSample, Tier, TrackedApp
 
-SUPPORTED_WINDOWS = {"24h", "48h", "1w", "1m", "3m", "6m", "1y"}
+SUPPORTED_WINDOWS = {"24h", "48h", "1w", "1m", "3m", "6m", "1y", "max"}
 
 
 @dataclass(slots=True)
@@ -37,7 +39,8 @@ def add_months(value: datetime, months: int) -> datetime:
     month_index = value.month - 1 + months
     year = value.year + month_index // 12
     month = month_index % 12 + 1
-    return value.replace(year=year, month=month)
+    max_day = calendar.monthrange(year, month)[1]
+    return value.replace(year=year, month=month, day=min(value.day, max_day))
 
 
 def get_history_window_start(latest_timestamp: datetime, window: str) -> datetime:
@@ -98,14 +101,9 @@ async def upsert_hourly_rollup(
     if snapshot is None:
         return None
 
-    existing = await session.scalar(
-        select(PlayerActivityHourly).where(
-            PlayerActivityHourly.steam_app_id == tracked_app.steam_app_id,
-            PlayerActivityHourly.bucket_started_at == snapshot.bucket_started_at,
-        )
-    )
-    if existing is None:
-        existing = PlayerActivityHourly(
+    await session.execute(
+        pg_insert(PlayerActivityHourly)
+        .values(
             tracked_app_id=tracked_app.id,
             steam_app_id=tracked_app.steam_app_id,
             bucket_started_at=snapshot.bucket_started_at,
@@ -116,14 +114,19 @@ async def upsert_hourly_rollup(
             sample_count=snapshot.sample_count,
             effective_tier_at_capture=snapshot.effective_tier_at_capture,
         )
-        session.add(existing)
-    else:
-        existing.window_ending_at = snapshot.window_ending_at
-        existing.observed_24h_high = snapshot.observed_24h_high
-        existing.observed_24h_low = snapshot.observed_24h_low
-        existing.latest_players = snapshot.latest_players
-        existing.sample_count = snapshot.sample_count
-        existing.effective_tier_at_capture = snapshot.effective_tier_at_capture
+        .on_conflict_do_update(
+            index_elements=[PlayerActivityHourly.steam_app_id, PlayerActivityHourly.bucket_started_at],
+            set_={
+                "tracked_app_id": tracked_app.id,
+                "window_ending_at": snapshot.window_ending_at,
+                "observed_24h_high": snapshot.observed_24h_high,
+                "observed_24h_low": snapshot.observed_24h_low,
+                "latest_players": snapshot.latest_players,
+                "sample_count": snapshot.sample_count,
+                "effective_tier_at_capture": snapshot.effective_tier_at_capture,
+            },
+        )
+    )
 
     tracked_app.latest_24h_high = snapshot.observed_24h_high
     tracked_app.latest_24h_low = snapshot.observed_24h_low

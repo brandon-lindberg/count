@@ -91,7 +91,7 @@ def test_resolve_admin_window_disables_unavailable_ranges() -> None:
     selected_window, options = _resolve_admin_window("1m", latest, earliest)
 
     assert selected_window == "24h"
-    assert [item["value"] for item in options if item["enabled"]] == ["24h"]
+    assert [item["value"] for item in options if item["enabled"]] == ["24h", "max"]
 
 
 def test_resolve_admin_window_keeps_48h_when_history_supports_it() -> None:
@@ -101,4 +101,4 @@ def test_resolve_admin_window_keeps_48h_when_history_supports_it() -> None:
     selected_window, options = _resolve_admin_window("48h", latest, earliest)
 
     assert selected_window == "48h"
-    assert [item["value"] for item in options if item["enabled"]] == ["24h", "48h"]
+    assert [item["value"] for item in options if item["enabled"]] == ["24h", "48h", "max"]

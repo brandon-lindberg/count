@@ -26,6 +26,10 @@ from app.services.steam_provider import SteamAppNotFoundError, SteamCurrentPlaye
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 settings = get_settings()
+_tier_poll_queue: asyncio.Queue[Tier] | None = None
+_tier_poll_worker_task: asyncio.Task[None] | None = None
+_tier_poll_state_lock: asyncio.Lock | None = None
+_queued_tier_polls: set[Tier] = set()
 
 
 @dataclass(slots=True)
@@ -33,6 +37,92 @@ class ScheduledJobDefinition:
     job_name: str
     interval_minutes: int
     runner: Callable[[], Awaitable[object]]
+
+
+def _get_tier_poll_queue() -> asyncio.Queue[Tier]:
+    global _tier_poll_queue
+    if _tier_poll_queue is None:
+        _tier_poll_queue = asyncio.Queue()
+    return _tier_poll_queue
+
+
+def _get_tier_poll_state_lock() -> asyncio.Lock:
+    global _tier_poll_state_lock
+    if _tier_poll_state_lock is None:
+        _tier_poll_state_lock = asyncio.Lock()
+    return _tier_poll_state_lock
+
+
+async def _run_tier_poll_queue() -> None:
+    global _tier_poll_worker_task
+
+    queue = _get_tier_poll_queue()
+    current_task = asyncio.current_task()
+
+    try:
+        while True:
+            try:
+                tier = queue.get_nowait()
+            except asyncio.QueueEmpty:
+                break
+
+            async with _get_tier_poll_state_lock():
+                _queued_tier_polls.discard(tier)
+
+            logger.info("Running queued tier poll %s", tier.value)
+            try:
+                await poll_tier_job(tier)
+            except Exception:
+                logger.exception("Queued tier poll crashed for %s", tier.value)
+            finally:
+                queue.task_done()
+    finally:
+        async with _get_tier_poll_state_lock():
+            if _tier_poll_worker_task is current_task:
+                _tier_poll_worker_task = None
+            if not queue.empty() and _tier_poll_worker_task is None:
+                _tier_poll_worker_task = asyncio.create_task(_run_tier_poll_queue())
+
+
+async def queue_tier_poll_job(tier: Tier) -> bool:
+    global _tier_poll_worker_task
+
+    queue = _get_tier_poll_queue()
+    async with _get_tier_poll_state_lock():
+        if tier in _queued_tier_polls:
+            logger.info("Tier poll %s already queued; skipping duplicate enqueue", tier.value)
+            return False
+
+        queue.put_nowait(tier)
+        _queued_tier_polls.add(tier)
+        if _tier_poll_worker_task is None or _tier_poll_worker_task.done():
+            _tier_poll_worker_task = asyncio.create_task(_run_tier_poll_queue())
+
+    logger.info("Queued tier poll %s", tier.value)
+    return True
+
+
+async def wait_for_tier_poll_queue_idle() -> None:
+    while True:
+        task = _tier_poll_worker_task
+        if task is None:
+            return
+        await task
+
+
+async def reset_tier_poll_queue_state() -> None:
+    global _tier_poll_queue
+    global _tier_poll_worker_task
+    global _tier_poll_state_lock
+
+    task = _tier_poll_worker_task
+    if task is not None and not task.done():
+        await task
+
+    _tier_poll_queue = None
+    _tier_poll_worker_task = None
+    _tier_poll_state_lock = None
+    _queued_tier_polls.clear()
 
 
 async def record_job(job_name: str, processed: int, success: int, failure: int, error: str | None = None) -> None:
@@ -47,6 +137,14 @@ async def record_job(job_name: str, processed: int, success: int, failure: int, 
             error_summary=error,
         )
         await session.commit()
+
+
+async def commit_poll_error_state(session: AsyncSession, steam_app_id: int) -> None:
+    try:
+        await session.commit()
+    except Exception:
+        await session.rollback()
+        logger.exception("Failed to persist poll error state for Steam app %s", steam_app_id)
 
 
 async def import_registry_job() -> None:
@@ -82,14 +180,14 @@ async def poll_tier_job(tier: Tier) -> None:
                         await session.commit()
                         success += 1
                     except SteamAppNotFoundError:
-                        await session.commit()
+                        await commit_poll_error_state(session, steam_app_id)
                         failure += 1
                         logger.warning(
                             "Steam app %s returned 404 from current players endpoint; backing off retries",
                             steam_app_id,
                         )
                     except Exception:
-                        await session.commit()
+                        await commit_poll_error_state(session, steam_app_id)
                         failure += 1
                         logger.exception("Poll failed for %s", steam_app_id)
         await record_job(f"poll_{tier.value}", len(due_ids), success, failure)
@@ -117,14 +215,14 @@ async def bootstrap_poll_job() -> int:
                         await session.commit()
                         success += 1
                     except SteamAppNotFoundError:
-                        await session.commit()
+                        await commit_poll_error_state(session, steam_app_id)
                         failure += 1
                         logger.warning(
                             "Steam app %s returned 404 from current players endpoint during bootstrap; backing off retries",
                             steam_app_id,
                         )
                     except Exception:
-                        await session.commit()
+                        await commit_poll_error_state(session, steam_app_id)
                         failure += 1
                         logger.exception("Bootstrap poll failed for %s", steam_app_id)
         await record_job("bootstrap_poll", len(due_ids), success, failure)
@@ -154,14 +252,14 @@ async def launch_watch_poll_job() -> int:
                         await session.commit()
                         success += 1
                     except SteamAppNotFoundError:
-                        await session.commit()
+                        await commit_poll_error_state(session, steam_app_id)
                         failure += 1
                         logger.warning(
                             "Steam app %s returned 404 from current players endpoint during launch watch; retrying soon",
                             steam_app_id,
                         )
                     except Exception:
-                        await session.commit()
+                        await commit_poll_error_state(session, steam_app_id)
                         failure += 1
                         logger.exception("Launch watch poll failed for %s", steam_app_id)
         await record_job("launch_watch_poll", len(due_ids), success, failure)
@@ -275,9 +373,9 @@ async def main() -> None:
         id="launch_watch_poll",
         replace_existing=True,
     )
-    scheduler.add_job(poll_tier_job, "interval", minutes=settings.hot_poll_minutes, id="poll_hot", replace_existing=True, args=[Tier.hot])
-    scheduler.add_job(poll_tier_job, "interval", minutes=settings.warm_poll_minutes, id="poll_warm", replace_existing=True, args=[Tier.warm])
-    scheduler.add_job(poll_tier_job, "interval", minutes=settings.cold_poll_minutes, id="poll_cold", replace_existing=True, args=[Tier.cold])
+    scheduler.add_job(queue_tier_poll_job, "interval", minutes=settings.hot_poll_minutes, id="poll_hot", replace_existing=True, args=[Tier.hot])
+    scheduler.add_job(queue_tier_poll_job, "interval", minutes=settings.warm_poll_minutes, id="poll_warm", replace_existing=True, args=[Tier.warm])
+    scheduler.add_job(queue_tier_poll_job, "interval", minutes=settings.cold_poll_minutes, id="poll_cold", replace_existing=True, args=[Tier.cold])
     scheduler.start()
     logger.info("Worker started")
     await asyncio.Event().wait()

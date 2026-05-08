@@ -12,6 +12,7 @@ WINDOW_LABELS = {
     "3m": "3 months",
     "6m": "6 months",
     "1y": "1 year",
+    "max": "all time",
 }
 
 

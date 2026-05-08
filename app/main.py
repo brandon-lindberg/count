@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import urlencode, urlsplit, urlunsplit
 
-from fastapi import Depends, FastAPI, Form, HTTPException, Query, Request, status
+from fastapi import BackgroundTasks, Depends, FastAPI, Form, HTTPException, Query, Request, status
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 from sqlalchemy import delete, func, select
@@ -32,14 +32,14 @@ from app.services.partitions import ensure_future_partitions
 from app.services.polling import poll_app
 from app.services.registry_importer import import_registry
 from app.services.rollups import SUPPORTED_WINDOWS, get_history_window_start
-from app.services.steam_provider import SteamCurrentPlayersProvider
+from app.services.steam_provider import SteamAppNotFoundError, SteamCurrentPlayersProvider
 from app.services.svg import build_history_svg
 from app.services.tiering import refresh_effective_tier
 
 settings = get_settings()
 app = FastAPI(title=settings.app_name)
 templates = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
-WINDOW_OPTIONS = ["24h", "48h", "1w", "1m", "3m", "6m", "1y"]
+WINDOW_OPTIONS = ["24h", "48h", "1w", "1m", "3m", "6m", "1y", "max"]
 APP_SORT_OPTIONS = {
     "title_asc": "A-Z",
     "title_desc": "Z-A",
@@ -189,7 +189,7 @@ def _window_is_available(
 ) -> bool:
     if latest_bucket is None or earliest_bucket is None:
         return window == "24h"
-    if window == "24h":
+    if window in ("24h", "max"):
         return True
     return earliest_bucket <= get_history_window_start(latest_bucket, window)
 
@@ -208,7 +208,11 @@ def _resolve_admin_window(
     ]
 
     enabled_windows = [item["value"] for item in window_options if item["enabled"]]
-    selected_window = requested_window if requested_window in enabled_windows else (enabled_windows[-1] if enabled_windows else "24h")
+    if requested_window in enabled_windows:
+        selected_window = requested_window
+    else:
+        bounded_enabled = [w for w in enabled_windows if w != "max"]
+        selected_window = bounded_enabled[-1] if bounded_enabled else ("max" if "max" in enabled_windows else "24h")
 
     for item in window_options:
         item["active"] = item["value"] == selected_window
@@ -738,17 +742,15 @@ async def admin_app_detail(
     selected_window, window_options = _resolve_admin_window(window, latest_bucket, earliest_bucket)
     history_points: list[PlayerActivityHourly] = []
     if latest_bucket is not None:
-        window_start = get_history_window_start(latest_bucket, selected_window)
-        history_points = (
-            await db.execute(
-                select(PlayerActivityHourly)
-                .where(
-                    PlayerActivityHourly.steam_app_id == steam_app_id,
-                    PlayerActivityHourly.window_ending_at >= window_start,
-                )
-                .order_by(PlayerActivityHourly.bucket_started_at.asc())
-            )
-        ).scalars().all()
+        history_query = (
+            select(PlayerActivityHourly)
+            .where(PlayerActivityHourly.steam_app_id == steam_app_id)
+            .order_by(PlayerActivityHourly.bucket_started_at.asc())
+        )
+        if selected_window != "max":
+            window_start = get_history_window_start(latest_bucket, selected_window)
+            history_query = history_query.where(PlayerActivityHourly.window_ending_at >= window_start)
+        history_points = (await db.execute(history_query)).scalars().all()
 
     return templates.TemplateResponse(
         "app_detail.html",
@@ -819,10 +821,36 @@ async def admin_clear_job_history(db: AsyncSession = Depends(get_db)) -> Redirec
     return RedirectResponse("/admin", status_code=status.HTTP_303_SEE_OTHER)
 
 
+async def _background_poll(steam_app_id: int) -> None:
+    async with SessionLocal() as db:
+        try:
+            tracked_app = await db.scalar(select(TrackedApp).where(TrackedApp.steam_app_id == steam_app_id))
+            if tracked_app is None:
+                return
+            job = await start_job_run(db, f"poll_now:{steam_app_id}")
+            async with SteamCurrentPlayersProvider(timeout_seconds=settings.http_timeout_seconds) as provider:
+                await poll_app(db, tracked_app, provider, settings)
+            await complete_job_run(db, job, processed_count=1, success_count=1, failure_count=0)
+            await db.commit()
+        except Exception:
+            logger.exception("Background poll failed for app %s", steam_app_id)
+
+
 @app.post("/admin/apps/{steam_app_id}/poll", dependencies=[Depends(require_admin_auth)])
-async def admin_poll_app(steam_app_id: int, db: AsyncSession = Depends(get_db)) -> RedirectResponse:
-    await poll_now_endpoint(steam_app_id, db)
-    return RedirectResponse(f"/admin/apps/{steam_app_id}", status_code=status.HTTP_303_SEE_OTHER)
+async def admin_poll_app(
+    steam_app_id: int,
+    background_tasks: BackgroundTasks,
+    db: AsyncSession = Depends(get_db),
+) -> RedirectResponse:
+    tracked_app = await _load_tracked_app_or_404(db, steam_app_id)
+    background_tasks.add_task(_background_poll, tracked_app.steam_app_id)
+    return RedirectResponse(
+        _build_url_with_query(
+            f"/admin/apps/{steam_app_id}",
+            {"notice": "Poll queued — refresh in a few seconds to see results", "notice_level": "ok"},
+        ),
+        status_code=status.HTTP_303_SEE_OTHER,
+    )
 
 
 @app.post("/admin/apps/{steam_app_id}/backfill-main-db", dependencies=[Depends(require_admin_auth)])

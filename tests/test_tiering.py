@@ -16,9 +16,9 @@ def _settings() -> SimpleNamespace:
     return SimpleNamespace(
         hot_threshold=10000,
         warm_threshold=500,
-        hot_poll_minutes=10,
+        hot_poll_minutes=30,
         warm_poll_minutes=60,
-        cold_poll_minutes=360,
+        cold_poll_minutes=180,
         release_hot_days=3,
         warm_floor_months=15,
     )
@@ -41,9 +41,9 @@ def test_manual_override_wins() -> None:
 
 def test_poll_interval_minutes() -> None:
     settings = _settings()
-    assert poll_interval_minutes(Tier.hot, settings) == 10
+    assert poll_interval_minutes(Tier.hot, settings) == 30
     assert poll_interval_minutes(Tier.warm, settings) == 60
-    assert poll_interval_minutes(Tier.cold, settings) == 360
+    assert poll_interval_minutes(Tier.cold, settings) == 180
 
 
 def test_is_release_hot_window_only_for_first_three_days_after_release() -> None:

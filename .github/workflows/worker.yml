@@ -2,7 +2,7 @@ name: Worker
 
 on:
   schedule:
-    - cron: "3/5 * * * *"
+    - cron: "3,33 * * * *"
   workflow_dispatch:
     inputs:
       force_all:
@@ -21,7 +21,7 @@ concurrency:
 jobs:
   run-worker-cycle:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 25
     env:
       APP_NAME: Steam Player Count Scraper
       ENVIRONMENT: production
@@ -32,6 +32,11 @@ jobs:
       SOURCE_API_TOKEN: ${{ secrets.SOURCE_API_TOKEN }}
       MIRROR_DATABASE_URL: ${{ secrets.MIRROR_DATABASE_URL }}
       MIRROR_DATABASE_USE_SSL: ${{ vars.MIRROR_DATABASE_USE_SSL || 'false' }}
+      HOT_POLL_MINUTES: "30"
+      WARM_POLL_MINUTES: "60"
+      COLD_POLL_MINUTES: "180"
+      POLL_BATCH_LIMIT: "150"
+      BOOTSTRAP_BATCH_LIMIT: "300"
     steps:
       - uses: actions/checkout@v5
 
@@ -47,6 +52,7 @@ jobs:
         run: |
           test -n "$DATABASE_URL" || { echo "DATABASE_URL secret is required"; exit 1; }
           test -n "$SOURCE_API_BASE_URL" || { echo "SOURCE_API_BASE_URL repo variable is required"; exit 1; }
+          test -n "$MIRROR_DATABASE_URL" || { echo "MIRROR_DATABASE_URL secret is required to mirror updates into backend DB"; exit 1; }
 
       - name: Run worker cycle
         run: |

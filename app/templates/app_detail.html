@@ -16,15 +16,26 @@
         <button type="submit">Backfill Main DB</button>
       </form>
       {% endif %}
-      <form method="post" action="/admin/apps/{{ app_item.steam_app_id }}/tier" class="inline">
-        <select name="tier">
+      <form method="post" action="/admin/apps/{{ app_item.steam_app_id }}/tier" class="inline" id="tier-form">
+        <select name="tier" id="tier-select">
           <option value="">Auto tier</option>
           {% for tier in tier_options %}
           <option value="{{ tier }}" {% if app_item.manual_tier_override and app_item.manual_tier_override.value == tier %}selected{% endif %}>{{ tier }}</option>
           {% endfor %}
         </select>
-        <button type="submit">Save Tier Override</button>
+        <button type="submit" id="tier-btn">Save Tier Override</button>
       </form>
+      <script>
+        document.getElementById('tier-select').addEventListener('change', function() {
+          var form = document.getElementById('tier-form');
+          var btn = document.getElementById('tier-btn');
+          btn.disabled = true;
+          btn.textContent = 'Saving…';
+          fetch(form.action, {method: 'POST', body: new FormData(form), redirect: 'manual'})
+            .then(function() { btn.textContent = '✓ Saved'; setTimeout(function(){ btn.textContent = 'Save Tier Override'; btn.disabled = false; }, 1500); })
+            .catch(function() { btn.textContent = 'Error'; btn.disabled = false; });
+        });
+      </script>
     </div>
   </div>
 </div>

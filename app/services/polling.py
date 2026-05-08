@@ -5,6 +5,7 @@ from datetime import date, datetime, timedelta, timezone
 import logging
 
 from sqlalchemy import case, or_, select
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import Settings
@@ -184,6 +185,51 @@ async def get_due_launch_watch_steam_app_ids(
     return list(result.scalars().all())
 
 
+async def upsert_player_sample(
+    session: AsyncSession,
+    tracked_app: TrackedApp,
+    sampled_at: datetime,
+    concurrent_players: int,
+) -> None:
+    await session.execute(
+        pg_insert(PlayerSample)
+        .values(
+            tracked_app_id=tracked_app.id,
+            steam_app_id=tracked_app.steam_app_id,
+            sampled_at=sampled_at,
+            concurrent_players=concurrent_players,
+            provider="steam_current_players",
+        )
+        .on_conflict_do_update(
+            index_elements=[PlayerSample.steam_app_id, PlayerSample.sampled_at],
+            set_={
+                "tracked_app_id": tracked_app.id,
+                "concurrent_players": concurrent_players,
+                "provider": "steam_current_players",
+            },
+        )
+    )
+
+
+async def persist_poll_failure(
+    session: AsyncSession,
+    tracked_app_id: int,
+    sampled_at: datetime,
+    exc: Exception,
+) -> None:
+    try:
+        await session.rollback()
+        tracked_app = await session.get(TrackedApp, tracked_app_id)
+        if tracked_app is None:
+            return
+        tracked_app.last_polled_at = sampled_at
+        tracked_app.last_error = format_poll_error(exc)[:2000]
+        await session.flush()
+    except Exception:
+        await session.rollback()
+        logger.exception("Failed to persist poll error state for tracked app %s", tracked_app_id)
+
+
 async def poll_app(
     session: AsyncSession,
     tracked_app: TrackedApp,
@@ -191,28 +237,12 @@ async def poll_app(
     settings: Settings,
     sampled_at: datetime | None = None,
 ) -> PollResult:
+    tracked_app_id = tracked_app.id
     effective_sampled_at = normalize_sample_timestamp(sampled_at)
     try:
         await ensure_partition_for_timestamp(session, effective_sampled_at)
         concurrent_players = await provider.get_current_players(tracked_app.steam_app_id)
-        existing_sample = await session.scalar(
-            select(PlayerSample).where(
-                PlayerSample.steam_app_id == tracked_app.steam_app_id,
-                PlayerSample.sampled_at == effective_sampled_at,
-            )
-        )
-        if existing_sample is None:
-            session.add(
-                PlayerSample(
-                    tracked_app_id=tracked_app.id,
-                    steam_app_id=tracked_app.steam_app_id,
-                    sampled_at=effective_sampled_at,
-                    concurrent_players=concurrent_players,
-                    provider="steam_current_players",
-                )
-            )
-        else:
-            existing_sample.concurrent_players = concurrent_players
+        await upsert_player_sample(session, tracked_app, effective_sampled_at, concurrent_players)
 
         tracked_app.last_known_players = concurrent_players
         tracked_app.last_polled_at = effective_sampled_at
@@ -248,7 +278,5 @@ async def poll_app(
             effective_tier=tracked_app.effective_tier,
         )
     except Exception as exc:
-        tracked_app.last_polled_at = effective_sampled_at
-        tracked_app.last_error = format_poll_error(exc)[:2000]
-        await session.flush()
+        await persist_poll_failure(session, tracked_app_id, effective_sampled_at, exc)
         raise
