@@ -83,6 +83,7 @@ After the first deploy, the API will connect to the Render Postgres instance via
 The long-running worker is set up to run from GitHub Actions instead of Render so you do not pay Render for a background worker.
 
 This repo includes [worker.yml](/Users/lindbergbrandon/player-count-scraper/.github/workflows/worker.yml), which runs a one-shot worker cycle every 30 minutes and can also be triggered manually.
+It also includes [worker-test.yml](/Users/lindbergbrandon/player-count-scraper/.github/workflows/worker-test.yml), a manual-only smoke workflow that caps registry import to 2 pages for fast validation.
 
 This does not replace the original local worker:
 
@@ -103,6 +104,7 @@ The GitHub worker uses the same DB-backed due-job checks as the local worker. Wi
 
 To reduce timeout risk on GitHub-hosted runners (especially during throttled periods), the workflow also sets conservative per-cycle limits (`POLL_BATCH_LIMIT=150`, `BOOTSTRAP_BATCH_LIMIT=300`) and a 25-minute job timeout.
 The worker now also syncs Steam user score metadata (score, sample size, sentiment counts, review description) and mirrors those fields into the backend DB.
+For rollout safety, the GitHub worker currently disables cold-tier polling (`ENABLE_COLD_POLLING=false`) and only runs hot/warm tier polls.
 
 ### GitHub repository settings
 

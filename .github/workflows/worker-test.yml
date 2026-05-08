@@ -1,8 +1,6 @@
-name: Worker
+name: Worker Test (2 Pages)
 
 on:
-  schedule:
-    - cron: "3,33 * * * *"
   workflow_dispatch:
     inputs:
       force_all:
@@ -15,13 +13,13 @@ permissions:
   contents: read
 
 concurrency:
-  group: player-count-scraper-worker
+  group: player-count-scraper-worker-test
   cancel-in-progress: false
 
 jobs:
-  run-worker-cycle:
+  run-worker-test-cycle:
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 20
     env:
       APP_NAME: Steam Player Count Scraper
       ENVIRONMENT: production
@@ -35,6 +33,7 @@ jobs:
       REQUIRE_MIRROR_SUCCESS: "true"
       HTTP_TIMEOUT_SECONDS: ${{ vars.HTTP_TIMEOUT_SECONDS || '45' }}
       SOURCE_API_PAGE_SIZE: ${{ vars.SOURCE_API_PAGE_SIZE || '50' }}
+      SOURCE_API_MAX_PAGES: "2"
       HOT_POLL_MINUTES: "30"
       WARM_POLL_MINUTES: "60"
       COLD_POLL_MINUTES: "180"
@@ -58,7 +57,7 @@ jobs:
           test -n "$SOURCE_API_BASE_URL" || { echo "SOURCE_API_BASE_URL repo variable is required"; exit 1; }
           test -n "$MIRROR_DATABASE_URL" || { echo "MIRROR_DATABASE_URL secret is required to mirror updates into backend DB"; exit 1; }
 
-      - name: Run worker cycle
+      - name: Run worker test cycle (2 pages max)
         run: |
           ARGS=""
           if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ "${{ inputs.force_all }}" = "true" ]; then

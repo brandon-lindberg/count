@@ -288,14 +288,16 @@ def is_scheduled_job_due(
 
 
 def build_scheduled_job_definitions() -> list[ScheduledJobDefinition]:
-    return [
+    jobs = [
         ScheduledJobDefinition("import_registry", settings.registry_import_minutes, import_registry_job),
         ScheduledJobDefinition("bootstrap_poll", settings.bootstrap_poll_minutes, bootstrap_poll_job),
         ScheduledJobDefinition("launch_watch_poll", settings.bootstrap_poll_minutes, launch_watch_poll_job),
         ScheduledJobDefinition("poll_hot", settings.hot_poll_minutes, lambda: poll_tier_job(Tier.hot)),
         ScheduledJobDefinition("poll_warm", settings.warm_poll_minutes, lambda: poll_tier_job(Tier.warm)),
-        ScheduledJobDefinition("poll_cold", settings.cold_poll_minutes, lambda: poll_tier_job(Tier.cold)),
     ]
+    if settings.enable_cold_polling:
+        jobs.append(ScheduledJobDefinition("poll_cold", settings.cold_poll_minutes, lambda: poll_tier_job(Tier.cold)))
+    return jobs
 
 
 async def _latest_job_started_at(job_name: str) -> datetime | None:

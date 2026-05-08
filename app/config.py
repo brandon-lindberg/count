@@ -23,6 +23,7 @@ class Settings(BaseSettings):
     source_api_base_url: str = 'http://localhost:8000'
     source_api_token: str | None = None
     source_api_page_size: int = 100
+    source_api_max_pages: int | None = None
 
     service_api_token: str | None = None
     admin_username: str | None = 'admin'
@@ -39,6 +40,7 @@ class Settings(BaseSettings):
     warm_floor_months: int = 15
     hot_threshold: int = 10000
     warm_threshold: int = 500
+    enable_cold_polling: bool = True
     poll_batch_limit: int = 250
     bootstrap_batch_limit: int = 500
     startup_bootstrap_max_batches: int = 25

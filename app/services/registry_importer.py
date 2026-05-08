@@ -14,6 +14,8 @@ from app.models import Tier, TrackedApp
 from app.services.tiering import is_recent_release_warm_floor_window, is_release_hot_window
 
 logger = logging.getLogger(__name__)
+REGISTRY_PAGE_RETRY_COUNT = 3
+REGISTRY_PAGE_RETRY_DELAY_SECONDS = 60
 
 
 @dataclass(slots=True)
@@ -124,8 +126,14 @@ async def import_registry(session: AsyncSession, settings: Settings) -> Registry
         page = 1
         total_pages = 1
         while page <= total_pages:
+            if settings.source_api_max_pages is not None and page > settings.source_api_max_pages:
+                logger.info(
+                    "Registry import stopping at page limit SOURCE_API_MAX_PAGES=%s",
+                    settings.source_api_max_pages,
+                )
+                break
             payload: dict | None = None
-            for attempt in range(4):
+            for attempt in range(REGISTRY_PAGE_RETRY_COUNT + 1):
                 try:
                     response = await client.get(
                         games_url,
@@ -142,16 +150,27 @@ async def import_registry(session: AsyncSession, settings: Settings) -> Registry
                         raise ValueError("Source API returned non-object payload")
                     break
                 except (httpx.HTTPError, ValueError) as exc:
-                    if attempt == 3:
+                    attempt_number = attempt + 1
+                    max_attempts = REGISTRY_PAGE_RETRY_COUNT + 1
+                    logger.warning(
+                        "Registry import page %s failed (attempt %s/%s): %s",
+                        page,
+                        attempt_number,
+                        max_attempts,
+                        exc,
+                    )
+                    if attempt == REGISTRY_PAGE_RETRY_COUNT:
                         logger.warning(
-                            "Registry import: page %s failed after %s attempts (%s); skipping page for this cycle",
+                            "Registry import page %s exhausted retries; skipping this page for current cycle",
                             page,
-                            attempt + 1,
-                            exc,
                         )
                         break
-                    # Exponential-ish backoff with a short ceiling for CI runs.
-                    await asyncio.sleep(min(2 ** attempt, 8))
+                    logger.info(
+                        "Registry import page %s retrying in %s seconds",
+                        page,
+                        REGISTRY_PAGE_RETRY_DELAY_SECONDS,
+                    )
+                    await asyncio.sleep(REGISTRY_PAGE_RETRY_DELAY_SECONDS)
 
             if payload is None:
                 page += 1
