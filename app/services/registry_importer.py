@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
+import asyncio
+import logging
 
 import httpx
 from sqlalchemy import select
@@ -10,6 +12,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.config import Settings
 from app.models import Tier, TrackedApp
 from app.services.tiering import is_recent_release_warm_floor_window, is_release_hot_window
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(slots=True)
@@ -120,17 +124,39 @@ async def import_registry(session: AsyncSession, settings: Settings) -> Registry
         page = 1
         total_pages = 1
         while page <= total_pages:
-            response = await client.get(
-                games_url,
-                params={
-                    "page": page,
-                    "per_page": settings.source_api_page_size,
-                    "sort_by": "release_date",
-                    "sort_order": "desc",
-                },
-            )
-            response.raise_for_status()
-            payload = response.json()
+            payload: dict | None = None
+            for attempt in range(4):
+                try:
+                    response = await client.get(
+                        games_url,
+                        params={
+                            "page": page,
+                            "per_page": settings.source_api_page_size,
+                            "sort_by": "release_date",
+                            "sort_order": "desc",
+                        },
+                    )
+                    response.raise_for_status()
+                    payload = response.json()
+                    if not isinstance(payload, dict):
+                        raise ValueError("Source API returned non-object payload")
+                    break
+                except (httpx.HTTPError, ValueError) as exc:
+                    if attempt == 3:
+                        logger.warning(
+                            "Registry import: page %s failed after %s attempts (%s); skipping page for this cycle",
+                            page,
+                            attempt + 1,
+                            exc,
+                        )
+                        break
+                    # Exponential-ish backoff with a short ceiling for CI runs.
+                    await asyncio.sleep(min(2 ** attempt, 8))
+
+            if payload is None:
+                page += 1
+                continue
+
             total_pages = int(payload.get("total_pages") or 1)
 
             for source_game in extract_tracked_games(payload):

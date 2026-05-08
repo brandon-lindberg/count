@@ -117,6 +117,8 @@ Optional GitHub settings:
 
 - Repository secret `SOURCE_API_TOKEN`
 - Repository variable `MIRROR_DATABASE_USE_SSL=true`
+- Repository variable `HTTP_TIMEOUT_SECONDS=45` (or `60` if timeouts persist)
+- Repository variable `SOURCE_API_PAGE_SIZE=50` (smaller pages reduce registry import timeout risk)
 
 Required for backend DB updates from GitHub worker:
 
