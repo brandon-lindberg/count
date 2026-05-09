@@ -30,8 +30,8 @@ class Settings(BaseSettings):
     admin_password: str | None = 'admin'
     disable_auth: bool = True
 
-    hot_poll_minutes: int = 30
-    warm_poll_minutes: int = 60
+    hot_poll_minutes: int = 60
+    warm_poll_minutes: int = 180
     cold_poll_minutes: int = 180
     bootstrap_poll_minutes: int = 5
     registry_import_hours: int | None = None
@@ -40,9 +40,13 @@ class Settings(BaseSettings):
     warm_floor_months: int = 15
     hot_threshold: int = 10000
     warm_threshold: int = 500
-    enable_cold_polling: bool = True
+    enable_cold_polling: bool = False
     poll_batch_limit: int = 250
+    hot_poll_batch_limit: int = 250
+    warm_poll_batch_limit: int = 2500
     bootstrap_batch_limit: int = 500
+    worker_cycle_max_seconds: int | None = None
+    worker_cycle_shutdown_grace_seconds: int = 60
     startup_bootstrap_max_batches: int = 25
     not_found_retry_hours: int = 24
     launch_not_found_retry_minutes: int = 15

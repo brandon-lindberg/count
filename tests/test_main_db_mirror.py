@@ -1,10 +1,14 @@
 from datetime import datetime, timezone
+from unittest.mock import AsyncMock
+
+import pytest
 
 from app.services.main_db_mirror import (
     MirrorBackfillStats,
     _build_game_summary_params,
     _build_range_rows_payload,
     _build_snapshot_rows_payload,
+    _update_game_summary,
 )
 
 
@@ -54,6 +58,26 @@ def test_build_game_summary_params_maps_fields_for_main_db_update() -> None:
     assert params["steam_player_24h_low_observed"] == 287
     assert params["steam_player_all_time_peak"] == 88337
     assert params["steam_player_all_time_peak_at"] == _utc(2026, 3, 6, 9, 0)
+
+
+@pytest.mark.asyncio
+async def test_update_game_summary_preserves_score_fields_when_score_payload_is_absent() -> None:
+    session = AsyncMock()
+    params = _build_game_summary_params(
+        game_id=42,
+        sampled_at=_utc(2026, 3, 19, 10, 4),
+        concurrent_players=308,
+        latest_24h_high=641,
+        latest_24h_low=287,
+        all_time_peak_players=88337,
+        all_time_peak_at=_utc(2026, 3, 6, 9, 0),
+    )
+
+    await _update_game_summary(session, params)
+
+    statement = str(session.execute.await_args.args[0])
+    assert "steam_user_score = coalesce(:steam_user_score, steam_user_score)" in statement
+    assert "steam_sample_size = coalesce(:steam_sample_size, steam_sample_size)" in statement
 
 
 def test_mirror_backfill_stats_merge_accumulates_counts() -> None:

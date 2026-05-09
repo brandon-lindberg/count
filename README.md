@@ -100,11 +100,9 @@ GitHub-hosted runners are free for public repositories on standard runners, but 
 
 Because of that, the workflow runs short scheduled cycles instead of `python -m app.worker` as a forever process.
 
-The GitHub worker uses the same DB-backed due-job checks as the local worker. With the production defaults, hot games are eligible every 30 minutes, warm games every 60 minutes, and cold games every 180 minutes. The workflow itself wakes up every 30 minutes, so skipped jobs exit quickly when their tier is not due yet.
+The GitHub worker uses the same DB-backed due-job checks as the local worker. With the production defaults, hot games are eligible every 60 minutes and warm games every 180 minutes. Cold-tier polling is disabled. The workflow itself wakes up every 30 minutes, so skipped jobs exit quickly when their tier is not due yet.
 
-To reduce timeout risk on GitHub-hosted runners (especially during throttled periods), the workflow also sets conservative per-cycle limits (`POLL_BATCH_LIMIT=150`, `BOOTSTRAP_BATCH_LIMIT=300`) and a 45-minute job timeout.
-The worker now also syncs Steam user score metadata (score, sample size, sentiment counts, review description) and mirrors those fields into the backend DB.
-For rollout safety, the GitHub worker currently disables cold-tier polling (`ENABLE_COLD_POLLING=false`) and only runs hot/warm tier polls.
+The workflow uses tier-specific player-count batches (`HOT_POLL_BATCH_LIMIT=250`, `WARM_POLL_BATCH_LIMIT=2500`) plus a separate bootstrap cap. It also sets an internal worker budget (`WORKER_CYCLE_MAX_SECONDS=13200`) below the GitHub timeout, so long cycles stop cleanly and record partial progress instead of being killed by the platform. Budget-exhausted runs are marked incomplete and become eligible again on the next worker cycle, resuming from remaining due apps because completed apps already have updated `last_polled_at`. Steam player counts and Steam user score metadata (score, sample size, sentiment counts, review description) are fetched and mirrored in the same HOT/WARM/NEW polling path so Steam writes stay serialized.
 
 ### GitHub repository settings
 
@@ -213,7 +211,7 @@ The admin app detail page includes a `Backfill Main DB` button for one-game back
 - Raw samples are retained indefinitely.
 - `player_samples` is monthly partitioned by `sampled_at`.
 - Steam polling uses the official `GetNumberOfCurrentPlayers` endpoint rather than HTML scraping.
-- Never-sampled apps are handled by a dedicated bootstrap queue that runs more frequently than the normal hot/warm/cold tier polls so new titles get a first sample quickly.
+- Never-sampled apps are handled by a dedicated bootstrap queue that runs more frequently than the normal hot/warm tier polls so new titles get a first sample quickly.
 - On startup, the worker drains multiple bootstrap batches so an initial local run seeds broad coverage instead of waiting hours for the first sample backlog to clear.
 - Registry sync now runs on a short minute-based interval so new games from the main backend are imported quickly.
 - Upcoming and newly released games are placed in a launch-watch queue that polls on a short interval even before they have a stable tier.

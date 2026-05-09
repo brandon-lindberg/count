@@ -2,12 +2,13 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
-from sqlalchemy import func, select
+from sqlalchemy import select
 
 from app.config import get_settings
 from app.database import SessionLocal
@@ -26,10 +27,12 @@ from app.services.steam_provider import SteamAppNotFoundError, SteamCurrentPlaye
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 settings = get_settings()
+RUNTIME_BUDGET_EXHAUSTED_ERROR = "runtime_budget_exhausted"
 _tier_poll_queue: asyncio.Queue[Tier] | None = None
 _tier_poll_worker_task: asyncio.Task[None] | None = None
 _tier_poll_state_lock: asyncio.Lock | None = None
 _queued_tier_polls: set[Tier] = set()
+_worker_cycle_deadline_monotonic: float | None = None
 
 
 @dataclass(slots=True)
@@ -37,6 +40,37 @@ class ScheduledJobDefinition:
     job_name: str
     interval_minutes: int
     runner: Callable[[], Awaitable[object]]
+
+
+def start_worker_runtime_budget(now_monotonic: float | None = None) -> None:
+    global _worker_cycle_deadline_monotonic
+    if settings.worker_cycle_max_seconds is None:
+        _worker_cycle_deadline_monotonic = None
+        return
+    _worker_cycle_deadline_monotonic = (now_monotonic if now_monotonic is not None else time.monotonic()) + settings.worker_cycle_max_seconds
+
+
+def clear_worker_runtime_budget() -> None:
+    global _worker_cycle_deadline_monotonic
+    _worker_cycle_deadline_monotonic = None
+
+
+def worker_runtime_budget_remaining_seconds(now_monotonic: float | None = None) -> float | None:
+    if _worker_cycle_deadline_monotonic is None:
+        return None
+    return _worker_cycle_deadline_monotonic - (now_monotonic if now_monotonic is not None else time.monotonic())
+
+
+def has_worker_runtime_budget(
+    *,
+    min_remaining_seconds: int | None = None,
+    now_monotonic: float | None = None,
+) -> bool:
+    remaining = worker_runtime_budget_remaining_seconds(now_monotonic=now_monotonic)
+    if remaining is None:
+        return True
+    minimum = settings.worker_cycle_shutdown_grace_seconds if min_remaining_seconds is None else min_remaining_seconds
+    return remaining > minimum
 
 
 def _get_tier_poll_queue() -> asyncio.Queue[Tier]:
@@ -86,6 +120,10 @@ async def _run_tier_poll_queue() -> None:
 
 async def queue_tier_poll_job(tier: Tier) -> bool:
     global _tier_poll_worker_task
+
+    if tier == Tier.cold:
+        logger.info("Cold polling is disabled; skipping queued tier poll")
+        return False
 
     queue = _get_tier_poll_queue()
     async with _get_tier_poll_state_lock():
@@ -163,14 +201,23 @@ async def import_registry_job() -> None:
 
 
 async def poll_tier_job(tier: Tier) -> None:
+    if tier == Tier.cold:
+        logger.info("Cold polling is disabled; skipping tier poll")
+        return
+
     due_ids: list[int] = []
     success = 0
     failure = 0
+    stopped_for_budget = False
     try:
         async with SessionLocal() as session:
             due_ids = await get_due_steam_app_ids(session, tier, settings)
         async with SteamCurrentPlayersProvider(timeout_seconds=settings.http_timeout_seconds) as provider:
             for steam_app_id in due_ids:
+                if not has_worker_runtime_budget():
+                    logger.warning("Stopping tier %s poll early; worker runtime budget is nearly exhausted", tier.value)
+                    stopped_for_budget = True
+                    break
                 async with SessionLocal() as session:
                     tracked_app = await session.scalar(select(TrackedApp).where(TrackedApp.steam_app_id == steam_app_id))
                     if tracked_app is None:
@@ -190,7 +237,13 @@ async def poll_tier_job(tier: Tier) -> None:
                         await commit_poll_error_state(session, steam_app_id)
                         failure += 1
                         logger.exception("Poll failed for %s", steam_app_id)
-        await record_job(f"poll_{tier.value}", len(due_ids), success, failure)
+        await record_job(
+            f"poll_{tier.value}",
+            len(due_ids),
+            success,
+            failure,
+            RUNTIME_BUDGET_EXHAUSTED_ERROR if stopped_for_budget else None,
+        )
         logger.info("Tier %s poll finished: %s due, %s success, %s failure", tier.value, len(due_ids), success, failure)
     except Exception as exc:
         logger.exception("Tier poll crashed for %s", tier.value)
@@ -201,11 +254,16 @@ async def bootstrap_poll_job() -> int:
     due_ids: list[int] = []
     success = 0
     failure = 0
+    stopped_for_budget = False
     try:
         async with SessionLocal() as session:
             due_ids = await get_due_bootstrap_steam_app_ids(session, settings)
         async with SteamCurrentPlayersProvider(timeout_seconds=settings.http_timeout_seconds) as provider:
             for steam_app_id in due_ids:
+                if not has_worker_runtime_budget():
+                    logger.warning("Stopping bootstrap poll early; worker runtime budget is nearly exhausted")
+                    stopped_for_budget = True
+                    break
                 async with SessionLocal() as session:
                     tracked_app = await session.scalar(select(TrackedApp).where(TrackedApp.steam_app_id == steam_app_id))
                     if tracked_app is None:
@@ -225,7 +283,13 @@ async def bootstrap_poll_job() -> int:
                         await commit_poll_error_state(session, steam_app_id)
                         failure += 1
                         logger.exception("Bootstrap poll failed for %s", steam_app_id)
-        await record_job("bootstrap_poll", len(due_ids), success, failure)
+        await record_job(
+            "bootstrap_poll",
+            len(due_ids),
+            success,
+            failure,
+            RUNTIME_BUDGET_EXHAUSTED_ERROR if stopped_for_budget else None,
+        )
         logger.info("Bootstrap poll finished: %s due, %s success, %s failure", len(due_ids), success, failure)
         return len(due_ids)
     except Exception as exc:
@@ -238,11 +302,16 @@ async def launch_watch_poll_job() -> int:
     due_ids: list[int] = []
     success = 0
     failure = 0
+    stopped_for_budget = False
     try:
         async with SessionLocal() as session:
             due_ids = await get_due_launch_watch_steam_app_ids(session, settings)
         async with SteamCurrentPlayersProvider(timeout_seconds=settings.http_timeout_seconds) as provider:
             for steam_app_id in due_ids:
+                if not has_worker_runtime_budget():
+                    logger.warning("Stopping launch watch poll early; worker runtime budget is nearly exhausted")
+                    stopped_for_budget = True
+                    break
                 async with SessionLocal() as session:
                     tracked_app = await session.scalar(select(TrackedApp).where(TrackedApp.steam_app_id == steam_app_id))
                     if tracked_app is None:
@@ -262,7 +331,13 @@ async def launch_watch_poll_job() -> int:
                         await commit_poll_error_state(session, steam_app_id)
                         failure += 1
                         logger.exception("Launch watch poll failed for %s", steam_app_id)
-        await record_job("launch_watch_poll", len(due_ids), success, failure)
+        await record_job(
+            "launch_watch_poll",
+            len(due_ids),
+            success,
+            failure,
+            RUNTIME_BUDGET_EXHAUSTED_ERROR if stopped_for_budget else None,
+        )
         logger.info("Launch watch poll finished: %s due, %s success, %s failure", len(due_ids), success, failure)
         return len(due_ids)
     except Exception as exc:
@@ -287,6 +362,18 @@ def is_scheduled_job_due(
     return last_started_at <= now - timedelta(minutes=interval_minutes)
 
 
+def is_latest_job_run_due(
+    latest_job: JobRun | object | None,
+    interval_minutes: int,
+    now: datetime,
+) -> bool:
+    if latest_job is None:
+        return True
+    if getattr(latest_job, "error_summary", None) == RUNTIME_BUDGET_EXHAUSTED_ERROR:
+        return True
+    return is_scheduled_job_due(getattr(latest_job, "started_at", None), interval_minutes, now)
+
+
 def build_scheduled_job_definitions() -> list[ScheduledJobDefinition]:
     jobs = [
         ScheduledJobDefinition("import_registry", settings.registry_import_minutes, import_registry_job),
@@ -295,14 +382,17 @@ def build_scheduled_job_definitions() -> list[ScheduledJobDefinition]:
         ScheduledJobDefinition("poll_hot", settings.hot_poll_minutes, lambda: poll_tier_job(Tier.hot)),
         ScheduledJobDefinition("poll_warm", settings.warm_poll_minutes, lambda: poll_tier_job(Tier.warm)),
     ]
-    if settings.enable_cold_polling:
-        jobs.append(ScheduledJobDefinition("poll_cold", settings.cold_poll_minutes, lambda: poll_tier_job(Tier.cold)))
     return jobs
 
 
-async def _latest_job_started_at(job_name: str) -> datetime | None:
+async def _latest_job_run(job_name: str) -> JobRun | None:
     async with SessionLocal() as session:
-        return await session.scalar(select(func.max(JobRun.started_at)).where(JobRun.job_name == job_name))
+        return await session.scalar(
+            select(JobRun)
+            .where(JobRun.job_name == job_name)
+            .order_by(JobRun.started_at.desc(), JobRun.id.desc())
+            .limit(1)
+        )
 
 
 async def maybe_run_scheduled_job(
@@ -313,8 +403,8 @@ async def maybe_run_scheduled_job(
 ) -> bool:
     effective_now = now or datetime.now(timezone.utc)
     if not force:
-        last_started_at = await _latest_job_started_at(definition.job_name)
-        if not is_scheduled_job_due(last_started_at, definition.interval_minutes, effective_now):
+        latest_job = await _latest_job_run(definition.job_name)
+        if not is_latest_job_run_due(latest_job, definition.interval_minutes, effective_now):
             logger.info(
                 "Skipping %s; next run not due yet",
                 definition.job_name,
@@ -331,6 +421,9 @@ async def run_due_jobs_once(*, force_all: bool = False, now: datetime | None = N
     executed: list[str] = []
 
     for definition in build_scheduled_job_definitions():
+        if not has_worker_runtime_budget():
+            logger.warning("Stopping one-shot worker cycle before %s; runtime budget is nearly exhausted", definition.job_name)
+            break
         if await maybe_run_scheduled_job(definition, now=now, force=force_all):
             executed.append(definition.job_name)
 
@@ -351,7 +444,7 @@ async def startup_sync() -> None:
     logger.info("Running startup launch watch poll")
     await launch_watch_poll_job()
 
-    for tier in (Tier.hot, Tier.warm, Tier.cold):
+    for tier in (Tier.hot, Tier.warm):
         logger.info("Running startup poll for tier %s", tier.value)
         await poll_tier_job(tier)
 
@@ -377,7 +470,6 @@ async def main() -> None:
     )
     scheduler.add_job(queue_tier_poll_job, "interval", minutes=settings.hot_poll_minutes, id="poll_hot", replace_existing=True, args=[Tier.hot])
     scheduler.add_job(queue_tier_poll_job, "interval", minutes=settings.warm_poll_minutes, id="poll_warm", replace_existing=True, args=[Tier.warm])
-    scheduler.add_job(queue_tier_poll_job, "interval", minutes=settings.cold_poll_minutes, id="poll_cold", replace_existing=True, args=[Tier.cold])
     scheduler.start()
     logger.info("Worker started")
     await asyncio.Event().wait()

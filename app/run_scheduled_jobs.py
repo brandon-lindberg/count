@@ -3,7 +3,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 
-from app.worker import run_due_jobs_once
+from app.worker import clear_worker_runtime_budget, run_due_jobs_once, start_worker_runtime_budget
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -19,7 +19,11 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 async def _run(args: argparse.Namespace) -> int:
-    executed = await run_due_jobs_once(force_all=args.force_all)
+    start_worker_runtime_budget()
+    try:
+        executed = await run_due_jobs_once(force_all=args.force_all)
+    finally:
+        clear_worker_runtime_budget()
     print("Ran jobs:", ", ".join(executed) if executed else "none")
     return 0
 

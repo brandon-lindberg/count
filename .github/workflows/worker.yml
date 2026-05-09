@@ -22,9 +22,9 @@ jobs:
   run-worker-cycle:
     runs-on: ubuntu-latest
     # GitHub-hosted jobs can run up to 6h; this caps our run earlier so a bad cycle fails fast.
-    # Poll budget (worst case, all jobs run): 2*BOOTSTRAP_BATCH_LIMIT + POLL_BATCH_LIMIT (hot) + POLL_BATCH_LIMIT (warm) [+ cold if enabled].
-    # Example: 2*100+100+100=400 polls × ~5s ≈ 33 min, plus checkout/pip/registry — keep total under this timeout.
-    timeout-minutes: 60
+    # Poll budget: bootstrap/launch-watch are capped separately; hot/warm use tier-specific limits.
+    # The cap is intentionally generous so GitHub timeout does not force partial warm rotations.
+    timeout-minutes: 240
     env:
       APP_NAME: Steam Player Count Scraper
       ENVIRONMENT: production
@@ -38,13 +38,15 @@ jobs:
       REQUIRE_MIRROR_SUCCESS: "true"
       HTTP_TIMEOUT_SECONDS: ${{ vars.HTTP_TIMEOUT_SECONDS || '45' }}
       SOURCE_API_PAGE_SIZE: ${{ vars.SOURCE_API_PAGE_SIZE || '50' }}
-      HOT_POLL_MINUTES: "30"
-      WARM_POLL_MINUTES: "60"
+      HOT_POLL_MINUTES: "60"
+      WARM_POLL_MINUTES: "180"
       COLD_POLL_MINUTES: "180"
       ENABLE_COLD_POLLING: "false"
-      # Smaller batches = more half-hourly cycles to drain the queue, but avoids job timeout.
-      # Warm ~2k apps: full rotation takes many runs regardless; hot ~100 fits easily in one batch.
-      POLL_BATCH_LIMIT: "100"
+      HOT_POLL_BATCH_LIMIT: "250"
+      WARM_POLL_BATCH_LIMIT: "2500"
+      # 220 minutes, leaving 20 minutes of headroom below timeout-minutes.
+      WORKER_CYCLE_MAX_SECONDS: "13200"
+      WORKER_CYCLE_SHUTDOWN_GRACE_SECONDS: "120"
       BOOTSTRAP_BATCH_LIMIT: "100"
     steps:
       - uses: actions/checkout@v5

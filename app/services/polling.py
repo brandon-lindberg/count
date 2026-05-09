@@ -28,6 +28,14 @@ class PollResult:
     effective_tier: Tier
 
 
+def tier_poll_batch_limit(tier: Tier, settings: Settings) -> int:
+    if tier == Tier.hot:
+        return settings.hot_poll_batch_limit
+    if tier == Tier.warm:
+        return settings.warm_poll_batch_limit
+    return 0
+
+
 def normalize_sample_timestamp(sampled_at: datetime | None = None) -> datetime:
     effective = (sampled_at or datetime.now(timezone.utc)).astimezone(timezone.utc)
     return effective.replace(second=0, microsecond=0)
@@ -95,7 +103,7 @@ async def get_due_steam_app_ids(
             TrackedApp.last_polled_at.asc().nullslast(),
             TrackedApp.steam_app_id.asc(),
         )
-        .limit(settings.poll_batch_limit)
+        .limit(tier_poll_batch_limit(tier, settings))
     )
     return list(result.scalars().all())
 

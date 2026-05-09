@@ -299,8 +299,8 @@ async def _update_game_summary(session: AsyncSession, params: dict[str, object])
                 steam_player_all_time_peak = :steam_player_all_time_peak,
                 steam_player_all_time_peak_at = :steam_player_all_time_peak_at,
                 steam_player_stats_synced_at = :sampled_at,
-                steam_user_score = :steam_user_score,
-                steam_sample_size = :steam_sample_size
+                steam_user_score = coalesce(:steam_user_score, steam_user_score),
+                steam_sample_size = coalesce(:steam_sample_size, steam_sample_size)
             where id = :game_id
             """
         ),
