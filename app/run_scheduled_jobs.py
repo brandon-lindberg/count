@@ -3,7 +3,13 @@ from __future__ import annotations
 import argparse
 import asyncio
 
-from app.worker import clear_worker_runtime_budget, run_due_jobs_once, start_worker_runtime_budget
+from app.worker import (
+    PIPELINE_ALL,
+    PIPELINE_CHOICES,
+    clear_worker_runtime_budget,
+    run_due_jobs_once,
+    start_worker_runtime_budget,
+)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -15,13 +21,22 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Run every scheduled job regardless of its latest recorded run time.",
     )
+    parser.add_argument(
+        "--pipeline",
+        choices=PIPELINE_CHOICES,
+        default=PIPELINE_ALL,
+        help=(
+            "Which job group to run: maintenance (registry + bootstrap + launch), "
+            "hot / warm (player counts only), scores (Steam reviews only), or all (legacy single-process order)."
+        ),
+    )
     return parser
 
 
 async def _run(args: argparse.Namespace) -> int:
     start_worker_runtime_budget()
     try:
-        executed = await run_due_jobs_once(force_all=args.force_all)
+        executed = await run_due_jobs_once(force_all=args.force_all, pipeline=args.pipeline)
     finally:
         clear_worker_runtime_budget()
     print("Ran jobs:", ", ".join(executed) if executed else "none")

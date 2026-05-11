@@ -16,9 +16,11 @@ from app.models import JobRun, Tier, TrackedApp
 from app.services.job_runs import complete_job_run, start_job_run
 from app.services.partitions import ensure_future_partitions
 from app.services.polling import (
+    PollAppMode,
     get_due_bootstrap_steam_app_ids,
     get_due_launch_watch_steam_app_ids,
     get_due_steam_app_ids,
+    get_due_user_score_steam_app_ids,
     poll_app,
 )
 from app.services.registry_importer import import_registry
@@ -28,6 +30,20 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 settings = get_settings()
 RUNTIME_BUDGET_EXHAUSTED_ERROR = "runtime_budget_exhausted"
+
+# Pipelines for `run_scheduled_jobs --pipeline` (separate GitHub Actions jobs, no shared queue).
+PIPELINE_ALL = "all"
+PIPELINE_MAINTENANCE = "maintenance"
+PIPELINE_HOT = "hot"
+PIPELINE_WARM = "warm"
+PIPELINE_SCORES = "scores"
+PIPELINE_CHOICES: tuple[str, ...] = (
+    PIPELINE_ALL,
+    PIPELINE_MAINTENANCE,
+    PIPELINE_HOT,
+    PIPELINE_WARM,
+    PIPELINE_SCORES,
+)
 _tier_poll_queue: asyncio.Queue[Tier] | None = None
 _tier_poll_worker_task: asyncio.Task[None] | None = None
 _tier_poll_state_lock: asyncio.Lock | None = None
@@ -105,7 +121,7 @@ async def _run_tier_poll_queue() -> None:
 
             logger.info("Running queued tier poll %s", tier.value)
             try:
-                await poll_tier_job(tier)
+                await poll_tier_job(tier, mode=PollAppMode.players_only)
             except Exception:
                 logger.exception("Queued tier poll crashed for %s", tier.value)
             finally:
@@ -200,7 +216,7 @@ async def import_registry_job() -> None:
         await record_job("import_registry", processed, 0, 1, str(exc)[:2000])
 
 
-async def poll_tier_job(tier: Tier) -> None:
+async def poll_tier_job(tier: Tier, *, mode: PollAppMode = PollAppMode.full) -> None:
     if tier == Tier.cold:
         logger.info("Cold polling is disabled; skipping tier poll")
         return
@@ -223,7 +239,7 @@ async def poll_tier_job(tier: Tier) -> None:
                     if tracked_app is None:
                         continue
                     try:
-                        await poll_app(session, tracked_app, provider, settings)
+                        await poll_app(session, tracked_app, provider, settings, mode=mode)
                         await session.commit()
                         success += 1
                     except SteamAppNotFoundError:
@@ -248,6 +264,60 @@ async def poll_tier_job(tier: Tier) -> None:
     except Exception as exc:
         logger.exception("Tier poll crashed for %s", tier.value)
         await record_job(f"poll_{tier.value}", len(due_ids), success, failure + 1, str(exc)[:2000])
+
+
+async def sync_user_scores_job() -> None:
+    due_ids: list[int] = []
+    success = 0
+    failure = 0
+    stopped_for_budget = False
+    try:
+        async with SessionLocal() as session:
+            due_ids = await get_due_user_score_steam_app_ids(session, settings)
+        async with SteamCurrentPlayersProvider(timeout_seconds=settings.http_timeout_seconds) as provider:
+            for steam_app_id in due_ids:
+                if not has_worker_runtime_budget():
+                    logger.warning("Stopping user score sync early; worker runtime budget is nearly exhausted")
+                    stopped_for_budget = True
+                    break
+                async with SessionLocal() as session:
+                    tracked_app = await session.scalar(select(TrackedApp).where(TrackedApp.steam_app_id == steam_app_id))
+                    if tracked_app is None:
+                        continue
+                    try:
+                        await poll_app(session, tracked_app, provider, settings, mode=PollAppMode.user_score_only)
+                        await session.commit()
+                        success += 1
+                    except SteamAppNotFoundError:
+                        await commit_poll_error_state(session, steam_app_id)
+                        failure += 1
+                        logger.warning(
+                            "Steam app %s returned 404 during user score sync; backing off retries",
+                            steam_app_id,
+                        )
+                    except Exception:
+                        await commit_poll_error_state(session, steam_app_id)
+                        failure += 1
+                        logger.exception("User score sync failed for %s", steam_app_id)
+        await record_job(
+            "sync_user_scores",
+            len(due_ids),
+            success,
+            failure,
+            RUNTIME_BUDGET_EXHAUSTED_ERROR if stopped_for_budget else None,
+        )
+        logger.info("User score sync finished: %s due, %s success, %s failure", len(due_ids), success, failure)
+    except Exception as exc:
+        logger.exception("User score sync crashed")
+        await record_job("sync_user_scores", len(due_ids), success, failure + 1, str(exc)[:2000])
+
+
+async def _run_poll_hot_players_only() -> None:
+    await poll_tier_job(Tier.hot, mode=PollAppMode.players_only)
+
+
+async def _run_poll_warm_players_only() -> None:
+    await poll_tier_job(Tier.warm, mode=PollAppMode.players_only)
 
 
 async def bootstrap_poll_job() -> int:
@@ -374,15 +444,32 @@ def is_latest_job_run_due(
     return is_scheduled_job_due(getattr(latest_job, "started_at", None), interval_minutes, now)
 
 
-def build_scheduled_job_definitions() -> list[ScheduledJobDefinition]:
-    jobs = [
+def build_pipeline_definitions(pipeline: str = PIPELINE_ALL) -> list[ScheduledJobDefinition]:
+    maintenance = [
         ScheduledJobDefinition("import_registry", settings.registry_import_minutes, import_registry_job),
         ScheduledJobDefinition("bootstrap_poll", settings.bootstrap_poll_minutes, bootstrap_poll_job),
         ScheduledJobDefinition("launch_watch_poll", settings.bootstrap_poll_minutes, launch_watch_poll_job),
-        ScheduledJobDefinition("poll_hot", settings.hot_poll_minutes, lambda: poll_tier_job(Tier.hot)),
-        ScheduledJobDefinition("poll_warm", settings.warm_poll_minutes, lambda: poll_tier_job(Tier.warm)),
     ]
-    return jobs
+    if pipeline == PIPELINE_MAINTENANCE:
+        return maintenance
+    if pipeline == PIPELINE_HOT:
+        return [ScheduledJobDefinition("poll_hot", settings.hot_poll_minutes, _run_poll_hot_players_only)]
+    if pipeline == PIPELINE_WARM:
+        return [ScheduledJobDefinition("poll_warm", settings.warm_poll_minutes, _run_poll_warm_players_only)]
+    if pipeline == PIPELINE_SCORES:
+        return [ScheduledJobDefinition("sync_user_scores", settings.user_score_poll_minutes, sync_user_scores_job)]
+    if pipeline == PIPELINE_ALL:
+        return [
+            *maintenance,
+            ScheduledJobDefinition("poll_hot", settings.hot_poll_minutes, _run_poll_hot_players_only),
+            ScheduledJobDefinition("poll_warm", settings.warm_poll_minutes, _run_poll_warm_players_only),
+            ScheduledJobDefinition("sync_user_scores", settings.user_score_poll_minutes, sync_user_scores_job),
+        ]
+    raise ValueError(f"Unknown pipeline {pipeline!r}; expected one of {PIPELINE_CHOICES}")
+
+
+def build_scheduled_job_definitions() -> list[ScheduledJobDefinition]:
+    return build_pipeline_definitions(PIPELINE_ALL)
 
 
 async def _latest_job_run(job_name: str) -> JobRun | None:
@@ -416,11 +503,16 @@ async def maybe_run_scheduled_job(
     return True
 
 
-async def run_due_jobs_once(*, force_all: bool = False, now: datetime | None = None) -> list[str]:
+async def run_due_jobs_once(
+    *,
+    force_all: bool = False,
+    now: datetime | None = None,
+    pipeline: str = PIPELINE_ALL,
+) -> list[str]:
     await bootstrap()
     executed: list[str] = []
 
-    for definition in build_scheduled_job_definitions():
+    for definition in build_pipeline_definitions(pipeline):
         if not has_worker_runtime_budget():
             logger.warning("Stopping one-shot worker cycle before %s; runtime budget is nearly exhausted", definition.job_name)
             break
@@ -470,6 +562,13 @@ async def main() -> None:
     )
     scheduler.add_job(queue_tier_poll_job, "interval", minutes=settings.hot_poll_minutes, id="poll_hot", replace_existing=True, args=[Tier.hot])
     scheduler.add_job(queue_tier_poll_job, "interval", minutes=settings.warm_poll_minutes, id="poll_warm", replace_existing=True, args=[Tier.warm])
+    scheduler.add_job(
+        sync_user_scores_job,
+        "interval",
+        minutes=settings.user_score_poll_minutes,
+        id="sync_user_scores",
+        replace_existing=True,
+    )
     scheduler.start()
     logger.info("Worker started")
     await asyncio.Event().wait()

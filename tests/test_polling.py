@@ -9,6 +9,7 @@ from app.config import Settings
 from app.models import Tier
 from app.services.polling import (
     STEAM_APP_NOT_FOUND_PREFIX,
+    PollAppMode,
     format_poll_error,
     is_launch_priority_release_date,
     poll_app,
@@ -150,6 +151,55 @@ async def test_poll_app_fetches_steam_user_score_in_same_poll(monkeypatch: pytes
     assert tracked_app.steam_score_synced_at == sampled_at
     provider.get_current_players.assert_awaited_once_with(730)
     provider.get_user_score.assert_awaited_once_with(730)
+
+
+@pytest.mark.asyncio
+async def test_poll_app_players_only_skips_user_score_fetch(monkeypatch: pytest.MonkeyPatch) -> None:
+    sampled_at = datetime(2026, 3, 19, 8, 0, tzinfo=timezone.utc)
+    tracked_app = SimpleNamespace(
+        id=99,
+        steam_app_id=440,
+        last_known_players=100,
+        last_polled_at=None,
+        last_success_at=sampled_at,
+        last_error=None,
+        all_time_peak_players=None,
+        all_time_peak_at=None,
+        latest_24h_high=None,
+        latest_24h_low=None,
+        steam_user_score=None,
+        steam_score_raw=None,
+        steam_sample_size=None,
+        steam_positive_count=None,
+        steam_negative_count=None,
+        steam_review_score_desc=None,
+        steam_score_synced_at=None,
+        effective_tier=Tier.hot,
+        manual_tier_override=None,
+        source_release_date=None,
+    )
+    provider = SimpleNamespace(
+        get_current_players=AsyncMock(return_value=999),
+        get_user_score=AsyncMock(),
+    )
+    session = SimpleNamespace(
+        execute=AsyncMock(),
+        flush=AsyncMock(),
+        commit=AsyncMock(),
+        rollback=AsyncMock(),
+        get=AsyncMock(return_value=tracked_app),
+    )
+    monkeypatch.setattr("app.services.polling.ensure_partition_for_timestamp", AsyncMock())
+    monkeypatch.setattr("app.services.polling.upsert_player_sample", AsyncMock())
+    monkeypatch.setattr("app.services.polling.refresh_effective_tier", AsyncMock(return_value=Tier.hot))
+    monkeypatch.setattr("app.services.polling.upsert_hourly_rollup", AsyncMock())
+    monkeypatch.setattr("app.services.polling.mirror_poll_to_main_db", AsyncMock())
+
+    await poll_app(session, tracked_app, provider, Settings(), sampled_at, mode=PollAppMode.players_only)
+
+    provider.get_current_players.assert_awaited_once_with(440)
+    provider.get_user_score.assert_not_called()
+    assert tracked_app.steam_user_score is None
 
 
 @pytest.mark.asyncio

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
+from enum import Enum
 import logging
 
 from sqlalchemy import case, or_, select
@@ -23,6 +24,14 @@ from app.services.tiering import poll_interval_minutes, refresh_effective_tier
 
 STEAM_APP_NOT_FOUND_PREFIX = "steam_app_not_found:"
 logger = logging.getLogger(__name__)
+
+
+class PollAppMode(str, Enum):
+    """What Steam + DB paths poll_app runs (mirror uses coalesce for partial updates)."""
+
+    full = "full"
+    players_only = "players_only"
+    user_score_only = "user_score_only"
 
 
 @dataclass(slots=True)
@@ -109,6 +118,39 @@ async def get_due_steam_app_ids(
             TrackedApp.steam_app_id.asc(),
         )
         .limit(tier_poll_batch_limit(tier, settings))
+    )
+    return list(result.scalars().all())
+
+
+async def get_due_user_score_steam_app_ids(
+    session: AsyncSession,
+    settings: Settings,
+    now: datetime | None = None,
+) -> list[int]:
+    """Apps that need a Steam store review / user score refresh (independent of tier player poll cadence)."""
+    effective_now = now or datetime.now(timezone.utc)
+    cutoff = effective_now - timedelta(minutes=settings.user_score_poll_minutes)
+    tier_rank = case(
+        (TrackedApp.effective_tier == Tier.hot, 0),
+        (TrackedApp.effective_tier == Tier.warm, 1),
+        else_=2,
+    )
+    result = await session.execute(
+        select(TrackedApp.steam_app_id)
+        .where(
+            TrackedApp.is_active.is_(True),
+            TrackedApp.last_success_at.is_not(None),
+            or_(
+                TrackedApp.steam_score_synced_at.is_(None),
+                TrackedApp.steam_score_synced_at <= cutoff,
+            ),
+        )
+        .order_by(
+            tier_rank.asc(),
+            TrackedApp.steam_score_synced_at.asc().nullsfirst(),
+            TrackedApp.steam_app_id.asc(),
+        )
+        .limit(settings.user_score_poll_batch_limit)
     )
     return list(result.scalars().all())
 
@@ -229,13 +271,16 @@ async def persist_poll_failure(
     tracked_app_id: int,
     sampled_at: datetime,
     exc: Exception,
+    *,
+    touch_last_polled_at: bool = True,
 ) -> None:
     try:
         await session.rollback()
         tracked_app = await session.get(TrackedApp, tracked_app_id)
         if tracked_app is None:
             return
-        tracked_app.last_polled_at = sampled_at
+        if touch_last_polled_at:
+            tracked_app.last_polled_at = sampled_at
         tracked_app.last_error = format_poll_error(exc)[:2000]
         await session.flush()
     except Exception:
@@ -249,6 +294,8 @@ async def poll_app(
     provider: SteamCurrentPlayersProvider,
     settings: Settings,
     sampled_at: datetime | None = None,
+    *,
+    mode: PollAppMode = PollAppMode.full,
 ) -> PollResult:
     tracked_app_id = tracked_app.id
     effective_sampled_at = normalize_sample_timestamp(sampled_at)
@@ -258,35 +305,54 @@ async def poll_app(
     # game whose current_players endpoint 404s (and vice versa).
     concurrent_players: int | None = None
     player_count_error: Exception | None = None
-    try:
-        concurrent_players = await provider.get_current_players(tracked_app.steam_app_id)
-    except Exception as exc:
-        player_count_error = exc
+    if mode != PollAppMode.user_score_only:
+        try:
+            concurrent_players = await provider.get_current_players(tracked_app.steam_app_id)
+        except Exception as exc:
+            player_count_error = exc
 
     steam_score: SteamUserScore | None = None
     user_score_error: Exception | None = None
-    try:
-        steam_score = await provider.get_user_score(tracked_app.steam_app_id)
-    except Exception as exc:
-        user_score_error = exc
+    if mode != PollAppMode.players_only:
+        try:
+            steam_score = await provider.get_user_score(tracked_app.steam_app_id)
+        except Exception as exc:
+            user_score_error = exc
 
     if concurrent_players is None and steam_score is None:
-        # Nothing to persist — keep the existing failure semantics so callers can
-        # tell something went wrong and record the appropriate error state.
-        primary_error: Exception = (
-            player_count_error
-            or user_score_error
-            or SteamProviderError(
-                f"Empty Steam response for app {tracked_app.steam_app_id}"
+        primary_error: Exception
+        if mode == PollAppMode.players_only:
+            primary_error = (
+                player_count_error
+                or SteamProviderError(f"Empty Steam response for app {tracked_app.steam_app_id}")
             )
+        elif mode == PollAppMode.user_score_only:
+            primary_error = (
+                user_score_error
+                or SteamProviderError(f"Empty Steam response for app {tracked_app.steam_app_id}")
+            )
+        else:
+            primary_error = (
+                player_count_error
+                or user_score_error
+                or SteamProviderError(
+                    f"Empty Steam response for app {tracked_app.steam_app_id}",
+                )
+            )
+        await persist_poll_failure(
+            session,
+            tracked_app_id,
+            effective_sampled_at,
+            primary_error,
+            touch_last_polled_at=mode != PollAppMode.user_score_only,
         )
-        await persist_poll_failure(session, tracked_app_id, effective_sampled_at, primary_error)
         raise primary_error
 
     try:
         await ensure_partition_for_timestamp(session, effective_sampled_at)
 
-        tracked_app.last_polled_at = effective_sampled_at
+        if mode != PollAppMode.user_score_only:
+            tracked_app.last_polled_at = effective_sampled_at
 
         if concurrent_players is not None:
             await upsert_player_sample(session, tracked_app, effective_sampled_at, concurrent_players)
@@ -294,7 +360,7 @@ async def poll_app(
             tracked_app.last_success_at = effective_sampled_at
             tracked_app.last_error = None
             update_all_time_peak(tracked_app, concurrent_players, effective_sampled_at)
-        elif player_count_error is not None:
+        elif player_count_error is not None and mode != PollAppMode.user_score_only:
             tracked_app.last_error = format_poll_error(player_count_error)[:2000]
 
         if steam_score is not None:
@@ -313,12 +379,19 @@ async def poll_app(
 
         # Flush the newly written sample before querying sample history for tiering and rollups.
         await session.flush()
-        await refresh_effective_tier(session, tracked_app, settings, effective_sampled_at)
-        if concurrent_players is not None:
-            await upsert_hourly_rollup(session, tracked_app, effective_sampled_at)
+        if mode != PollAppMode.user_score_only:
+            await refresh_effective_tier(session, tracked_app, settings, effective_sampled_at)
+            if concurrent_players is not None:
+                await upsert_hourly_rollup(session, tracked_app, effective_sampled_at)
         await session.flush()
     except Exception as exc:
-        await persist_poll_failure(session, tracked_app_id, effective_sampled_at, exc)
+        await persist_poll_failure(
+            session,
+            tracked_app_id,
+            effective_sampled_at,
+            exc,
+            touch_last_polled_at=mode != PollAppMode.user_score_only,
+        )
         raise
 
     # Commit the scraper-side state before attempting the mirror. A mirror failure

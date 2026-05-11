@@ -77,7 +77,7 @@ async def test_queue_tier_poll_job_runs_serially(monkeypatch: pytest.MonkeyPatch
     finished: list[Tier] = []
     release_hot = asyncio.Event()
 
-    async def fake_poll_tier_job(tier: Tier) -> None:
+    async def fake_poll_tier_job(tier: Tier, **kwargs: object) -> None:
         started.append(tier)
         if tier == Tier.hot:
             await release_hot.wait()
@@ -106,7 +106,7 @@ async def test_queue_tier_poll_job_skips_duplicate_pending_tiers(monkeypatch: py
     await worker_module.reset_tier_poll_queue_state()
     calls: list[Tier] = []
 
-    async def fake_poll_tier_job(tier: Tier) -> None:
+    async def fake_poll_tier_job(tier: Tier, **kwargs: object) -> None:
         calls.append(tier)
 
     monkeypatch.setattr(worker_module, "poll_tier_job", fake_poll_tier_job)
@@ -126,7 +126,7 @@ async def test_queue_tier_poll_job_allows_requeue_while_running(monkeypatch: pyt
     calls: list[Tier] = []
     release_first_run = asyncio.Event()
 
-    async def fake_poll_tier_job(tier: Tier) -> None:
+    async def fake_poll_tier_job(tier: Tier, **kwargs: object) -> None:
         calls.append(tier)
         if len(calls) == 1:
             await release_first_run.wait()
@@ -144,13 +144,29 @@ async def test_queue_tier_poll_job_allows_requeue_while_running(monkeypatch: pyt
     await worker_module.reset_tier_poll_queue_state()
 
 
-def test_scheduled_job_definitions_are_hot_warm_only() -> None:
+def test_scheduled_job_definitions_include_pipelines() -> None:
     job_names = [job.job_name for job in worker_module.build_scheduled_job_definitions()]
 
-    assert "poll_hot" in job_names
-    assert "poll_warm" in job_names
+    assert job_names == [
+        "import_registry",
+        "bootstrap_poll",
+        "launch_watch_poll",
+        "poll_hot",
+        "poll_warm",
+        "sync_user_scores",
+    ]
     assert "poll_cold" not in job_names
-    assert "sync_steam_scores" not in job_names
+
+
+def test_pipeline_definitions_hot_is_players_only_job() -> None:
+    hot_jobs = worker_module.build_pipeline_definitions(worker_module.PIPELINE_HOT)
+    assert len(hot_jobs) == 1
+    assert hot_jobs[0].job_name == "poll_hot"
+
+
+def test_pipeline_definitions_maintenance_excludes_tier_polls() -> None:
+    names = [j.job_name for j in worker_module.build_pipeline_definitions(worker_module.PIPELINE_MAINTENANCE)]
+    assert names == ["import_registry", "bootstrap_poll", "launch_watch_poll"]
 
 
 @pytest.mark.asyncio
@@ -166,7 +182,7 @@ async def test_startup_sync_polls_only_hot_and_warm(monkeypatch: pytest.MonkeyPa
     async def fake_launch_watch_poll_job() -> int:
         return 0
 
-    async def fake_poll_tier_job(tier: Tier) -> None:
+    async def fake_poll_tier_job(tier: Tier, **kwargs: object) -> None:
         polled_tiers.append(tier)
 
     monkeypatch.setattr(worker_module, "import_registry_job", fake_import_registry_job)
@@ -207,5 +223,5 @@ def test_scheduler_registration_is_hot_warm_only(monkeypatch: pytest.MonkeyPatch
 
     assert "poll_hot" in registered_job_ids
     assert "poll_warm" in registered_job_ids
+    assert "sync_user_scores" in registered_job_ids
     assert "poll_cold" not in registered_job_ids
-    assert "sync_steam_scores" not in registered_job_ids

@@ -1,12 +1,12 @@
-name: Worker
+name: Worker (user scores)
 
 on:
   schedule:
-    - cron: "3,33 * * * *"
+    - cron: "12,42 * * * *"
   workflow_dispatch:
     inputs:
       force_all:
-        description: Run every scheduled job regardless of interval state
+        description: Run sync_user_scores regardless of interval state
         required: false
         default: false
         type: boolean
@@ -15,16 +15,13 @@ permissions:
   contents: read
 
 concurrency:
-  group: player-count-scraper-worker
+  group: player-count-scraper-scores
   cancel-in-progress: false
 
 jobs:
-  run-worker-cycle:
+  run-scores:
     runs-on: ubuntu-latest
-    # GitHub-hosted jobs can run up to 6h; this caps our run earlier so a bad cycle fails fast.
-    # Poll budget: bootstrap/launch-watch are capped separately; hot/warm use tier-specific limits.
-    # The cap is intentionally generous so GitHub timeout does not force partial warm rotations.
-    timeout-minutes: 240
+    timeout-minutes: 120
     env:
       APP_NAME: Steam Player Count Scraper
       ENVIRONMENT: production
@@ -37,17 +34,10 @@ jobs:
       MIRROR_DATABASE_USE_SSL: ${{ vars.MIRROR_DATABASE_USE_SSL || 'false' }}
       REQUIRE_MIRROR_SUCCESS: "true"
       HTTP_TIMEOUT_SECONDS: ${{ vars.HTTP_TIMEOUT_SECONDS || '45' }}
-      SOURCE_API_PAGE_SIZE: ${{ vars.SOURCE_API_PAGE_SIZE || '50' }}
-      HOT_POLL_MINUTES: "60"
-      WARM_POLL_MINUTES: "180"
-      COLD_POLL_MINUTES: "180"
-      ENABLE_COLD_POLLING: "false"
-      HOT_POLL_BATCH_LIMIT: "250"
-      WARM_POLL_BATCH_LIMIT: "2500"
-      # 220 minutes, leaving 20 minutes of headroom below timeout-minutes.
-      WORKER_CYCLE_MAX_SECONDS: "13200"
+      USER_SCORE_POLL_MINUTES: ${{ vars.USER_SCORE_POLL_MINUTES || '30' }}
+      USER_SCORE_POLL_BATCH_LIMIT: ${{ vars.USER_SCORE_POLL_BATCH_LIMIT || '2000' }}
+      WORKER_CYCLE_MAX_SECONDS: "6600"
       WORKER_CYCLE_SHUTDOWN_GRACE_SECONDS: "120"
-      BOOTSTRAP_BATCH_LIMIT: "100"
     steps:
       - uses: actions/checkout@v5
 
@@ -65,10 +55,10 @@ jobs:
           test -n "$SOURCE_API_BASE_URL" || { echo "SOURCE_API_BASE_URL repo variable is required"; exit 1; }
           test -n "$MIRROR_DATABASE_URL" || { echo "MIRROR_DATABASE_URL secret is required to mirror updates into backend DB"; exit 1; }
 
-      - name: Run worker cycle
+      - name: Run user score pipeline
         run: |
-          ARGS=""
+          ARGS="--pipeline scores"
           if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ "${{ inputs.force_all }}" = "true" ]; then
-            ARGS="--force-all"
+            ARGS="$ARGS --force-all"
           fi
           bash ./scripts/with_asyncpg_env.sh python -m app.run_scheduled_jobs $ARGS

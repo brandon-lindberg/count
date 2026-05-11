@@ -1,6 +1,8 @@
-name: Worker Test (2 Pages)
+name: Worker (maintenance)
 
 on:
+  schedule:
+    - cron: "5,20,35,50 * * * *"
   workflow_dispatch:
     inputs:
       force_all:
@@ -13,14 +15,13 @@ permissions:
   contents: read
 
 concurrency:
-  group: player-count-scraper-worker-test
+  group: player-count-scraper-maintenance
   cancel-in-progress: false
 
 jobs:
-  run-worker-test-cycle:
+  run-maintenance:
     runs-on: ubuntu-latest
-    # Keep in sync with poll batch math (2*bootstrap + hot + warm); test run imports only 2 API pages.
-    timeout-minutes: 25
+    timeout-minutes: 90
     env:
       APP_NAME: Steam Player Count Scraper
       ENVIRONMENT: production
@@ -34,16 +35,11 @@ jobs:
       REQUIRE_MIRROR_SUCCESS: "true"
       HTTP_TIMEOUT_SECONDS: ${{ vars.HTTP_TIMEOUT_SECONDS || '45' }}
       SOURCE_API_PAGE_SIZE: ${{ vars.SOURCE_API_PAGE_SIZE || '50' }}
-      SOURCE_API_MAX_PAGES: "2"
-      HOT_POLL_MINUTES: "60"
-      WARM_POLL_MINUTES: "180"
-      COLD_POLL_MINUTES: "180"
-      ENABLE_COLD_POLLING: "false"
-      HOT_POLL_BATCH_LIMIT: "80"
-      WARM_POLL_BATCH_LIMIT: "200"
-      WORKER_CYCLE_MAX_SECONDS: "1200"
+      BOOTSTRAP_POLL_MINUTES: "5"
+      BOOTSTRAP_BATCH_LIMIT: ${{ vars.BOOTSTRAP_BATCH_LIMIT || '100' }}
+      REGISTRY_IMPORT_MINUTES: ${{ vars.REGISTRY_IMPORT_MINUTES || '15' }}
+      WORKER_CYCLE_MAX_SECONDS: "4800"
       WORKER_CYCLE_SHUTDOWN_GRACE_SECONDS: "120"
-      BOOTSTRAP_BATCH_LIMIT: "80"
     steps:
       - uses: actions/checkout@v5
 
@@ -61,9 +57,9 @@ jobs:
           test -n "$SOURCE_API_BASE_URL" || { echo "SOURCE_API_BASE_URL repo variable is required"; exit 1; }
           test -n "$MIRROR_DATABASE_URL" || { echo "MIRROR_DATABASE_URL secret is required to mirror updates into backend DB"; exit 1; }
 
-      - name: Run worker test cycle (2 pages max)
+      - name: Run maintenance pipeline
         run: |
-          ARGS="--pipeline all"
+          ARGS="--pipeline maintenance"
           if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ "${{ inputs.force_all }}" = "true" ]; then
             ARGS="$ARGS --force-all"
           fi

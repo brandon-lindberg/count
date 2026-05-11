@@ -30,9 +30,11 @@ class Settings(BaseSettings):
     admin_password: str | None = 'admin'
     disable_auth: bool = True
 
-    hot_poll_minutes: int = 60
+    hot_poll_minutes: int = 30
     warm_poll_minutes: int = 180
     cold_poll_minutes: int = 180
+    user_score_poll_minutes: int = 45
+    user_score_poll_batch_limit: int = 2000
     bootstrap_poll_minutes: int = 5
     registry_import_hours: int | None = None
     registry_import_minutes: int = 15
