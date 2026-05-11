@@ -15,7 +15,7 @@ from app.services.polling import (
     tier_poll_batch_limit,
     update_all_time_peak,
 )
-from app.services.steam_provider import SteamAppNotFoundError, SteamUserScore
+from app.services.steam_provider import SteamAppNotFoundError, SteamProviderError, SteamUserScore
 
 
 def test_format_poll_error_marks_not_found_errors() -> None:
@@ -112,6 +112,7 @@ async def test_poll_app_fetches_steam_user_score_in_same_poll(monkeypatch: pytes
     session = SimpleNamespace(
         execute=AsyncMock(),
         flush=AsyncMock(),
+        commit=AsyncMock(),
         rollback=AsyncMock(),
         get=AsyncMock(return_value=tracked_app),
     )
@@ -149,3 +150,132 @@ async def test_poll_app_fetches_steam_user_score_in_same_poll(monkeypatch: pytes
     assert tracked_app.steam_score_synced_at == sampled_at
     provider.get_current_players.assert_awaited_once_with(730)
     provider.get_user_score.assert_awaited_once_with(730)
+
+
+@pytest.mark.asyncio
+async def test_poll_app_persists_user_score_when_player_count_fetch_fails(monkeypatch: pytest.MonkeyPatch) -> None:
+    sampled_at = datetime(2026, 3, 19, 8, 0, tzinfo=timezone.utc)
+    score = SteamUserScore(
+        score=Decimal("88.0"),
+        score_raw="880/1000",
+        sample_size=1000,
+        positive_count=880,
+        negative_count=120,
+        review_score_desc="Very Positive",
+        scraped_at=sampled_at,
+    )
+    tracked_app = SimpleNamespace(
+        id=2,
+        steam_app_id=2701720,
+        last_known_players=None,
+        last_polled_at=None,
+        last_success_at=None,
+        last_error=None,
+        all_time_peak_players=None,
+        all_time_peak_at=None,
+        latest_24h_high=None,
+        latest_24h_low=None,
+        steam_user_score=None,
+        steam_score_raw=None,
+        steam_sample_size=None,
+        steam_positive_count=None,
+        steam_negative_count=None,
+        steam_review_score_desc=None,
+        steam_score_synced_at=None,
+        effective_tier=Tier.warm,
+        manual_tier_override=None,
+        source_release_date=None,
+    )
+    provider = SimpleNamespace(
+        get_current_players=AsyncMock(side_effect=SteamProviderError("missing player_count")),
+        get_user_score=AsyncMock(return_value=score),
+    )
+    session = SimpleNamespace(
+        execute=AsyncMock(),
+        flush=AsyncMock(),
+        commit=AsyncMock(),
+        rollback=AsyncMock(),
+        get=AsyncMock(return_value=tracked_app),
+    )
+
+    monkeypatch.setattr("app.services.polling.ensure_partition_for_timestamp", AsyncMock())
+    monkeypatch.setattr("app.services.polling.upsert_player_sample", AsyncMock())
+    monkeypatch.setattr("app.services.polling.refresh_effective_tier", AsyncMock(return_value=Tier.warm))
+    monkeypatch.setattr("app.services.polling.upsert_hourly_rollup", AsyncMock())
+    monkeypatch.setattr("app.services.polling.mirror_poll_to_main_db", AsyncMock())
+
+    result = await poll_app(session, tracked_app, provider, Settings(), sampled_at)
+
+    assert tracked_app.steam_user_score == Decimal("88.0")
+    assert tracked_app.steam_sample_size == 1000
+    assert tracked_app.last_success_at == sampled_at
+    assert tracked_app.last_error is None
+    assert result.concurrent_players == 0
+    session.commit.assert_awaited()
+
+
+@pytest.mark.asyncio
+async def test_poll_app_does_not_rollback_local_state_when_mirror_fails(monkeypatch: pytest.MonkeyPatch) -> None:
+    sampled_at = datetime(2026, 3, 19, 8, 0, tzinfo=timezone.utc)
+    score = SteamUserScore(
+        score=Decimal("92.0"),
+        score_raw="920/1000",
+        sample_size=1000,
+        positive_count=920,
+        negative_count=80,
+        review_score_desc="Very Positive",
+        scraped_at=sampled_at,
+    )
+    tracked_app = SimpleNamespace(
+        id=3,
+        steam_app_id=12345,
+        last_known_players=None,
+        last_polled_at=None,
+        last_success_at=None,
+        last_error=None,
+        all_time_peak_players=None,
+        all_time_peak_at=None,
+        latest_24h_high=None,
+        latest_24h_low=None,
+        steam_user_score=None,
+        steam_score_raw=None,
+        steam_sample_size=None,
+        steam_positive_count=None,
+        steam_negative_count=None,
+        steam_review_score_desc=None,
+        steam_score_synced_at=None,
+        effective_tier=Tier.hot,
+        manual_tier_override=None,
+        source_release_date=None,
+    )
+    provider = SimpleNamespace(
+        get_current_players=AsyncMock(return_value=500),
+        get_user_score=AsyncMock(return_value=score),
+    )
+    session = SimpleNamespace(
+        execute=AsyncMock(),
+        flush=AsyncMock(),
+        commit=AsyncMock(),
+        rollback=AsyncMock(),
+        get=AsyncMock(return_value=tracked_app),
+    )
+
+    monkeypatch.setattr("app.services.polling.ensure_partition_for_timestamp", AsyncMock())
+    monkeypatch.setattr("app.services.polling.upsert_player_sample", AsyncMock())
+    monkeypatch.setattr("app.services.polling.refresh_effective_tier", AsyncMock(return_value=Tier.hot))
+    monkeypatch.setattr("app.services.polling.upsert_hourly_rollup", AsyncMock())
+    monkeypatch.setattr(
+        "app.services.polling.mirror_poll_to_main_db",
+        AsyncMock(side_effect=RuntimeError("mirror exploded")),
+    )
+
+    settings = Settings(require_mirror_success=True)
+    # Should NOT raise even when mirror fails and require_mirror_success is True.
+    result = await poll_app(session, tracked_app, provider, settings, sampled_at)
+
+    assert result.concurrent_players == 500
+    assert tracked_app.steam_user_score == Decimal("92.0")
+    assert tracked_app.steam_sample_size == 1000
+    # Local commit happened before mirror was attempted.
+    session.commit.assert_awaited()
+    session.rollback.assert_not_awaited()

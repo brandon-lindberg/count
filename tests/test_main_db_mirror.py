@@ -78,6 +78,29 @@ async def test_update_game_summary_preserves_score_fields_when_score_payload_is_
     statement = str(session.execute.await_args.args[0])
     assert "steam_user_score = coalesce(:steam_user_score, steam_user_score)" in statement
     assert "steam_sample_size = coalesce(:steam_sample_size, steam_sample_size)" in statement
+    # Player-count columns also coalesce now so a score-only poll (no player count)
+    # cannot blank them out.
+    assert "steam_current_players = coalesce(:concurrent_players, steam_current_players)" in statement
+    assert "steam_player_24h_peak = coalesce(:steam_player_24h_peak, steam_player_24h_peak)" in statement
+
+
+def test_build_game_summary_params_drops_player_timestamp_when_player_count_missing() -> None:
+    params = _build_game_summary_params(
+        game_id=42,
+        sampled_at=_utc(2026, 3, 19, 10, 4),
+        concurrent_players=None,
+        latest_24h_high=None,
+        latest_24h_low=None,
+        all_time_peak_players=None,
+        all_time_peak_at=None,
+        steam_user_score=95,
+        steam_sample_size=1652,
+    )
+
+    assert params["player_sampled_at"] is None
+    assert params["sampled_at"] == _utc(2026, 3, 19, 10, 4)
+    assert params["steam_user_score"] == 95
+    assert params["steam_sample_size"] == 1652
 
 
 def test_mirror_backfill_stats_merge_accumulates_counts() -> None:

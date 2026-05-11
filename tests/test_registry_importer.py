@@ -31,13 +31,13 @@ def test_extract_tracked_games_filters_missing_ids() -> None:
 def test_build_source_games_url_defaults_to_api_v1_games() -> None:
     settings = Settings(source_api_base_url="http://localhost:8000")
 
-    assert build_source_games_url(settings) == "http://localhost:8000/api/v1/games"
+    assert build_source_games_url(settings) == "http://localhost:8000/api/v1/internal/tracked-games"
 
 
 def test_build_source_games_url_preserves_existing_api_v1_base() -> None:
     settings = Settings(source_api_base_url="http://localhost:8000/api/v1")
 
-    assert build_source_games_url(settings) == "http://localhost:8000/api/v1/games"
+    assert build_source_games_url(settings) == "http://localhost:8000/api/v1/internal/tracked-games"
 
 
 def test_imported_at_for_source_position_preserves_newest_first_order() -> None:

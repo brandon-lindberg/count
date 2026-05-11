@@ -50,8 +50,8 @@ def build_source_headers(settings: Settings) -> dict[str, str]:
 def build_source_games_url(settings: Settings) -> str:
     base_url = settings.source_api_base_url.rstrip("/")
     if base_url.endswith("/api/v1"):
-        return f"{base_url}/games"
-    return f"{base_url}/api/v1/games"
+        return f"{base_url}/internal/tracked-games"
+    return f"{base_url}/api/v1/internal/tracked-games"
 
 
 def extract_tracked_games(payload: dict) -> list[SourceGame]:

@@ -199,9 +199,13 @@ def _build_game_summary_params(
     steam_user_score: object | None = None,
     steam_sample_size: int | None = None,
 ) -> dict[str, object]:
+    # player_sampled_at gates updates to player-count-derived timestamps so we don't
+    # bump them when this poll only refreshed the user score.
+    player_sampled_at = sampled_at if concurrent_players is not None else None
     return {
         "game_id": game_id,
         "sampled_at": sampled_at,
+        "player_sampled_at": player_sampled_at,
         "concurrent_players": concurrent_players,
         "steam_player_24h_peak": latest_24h_high,
         "steam_player_24h_low_observed": latest_24h_low,
@@ -287,18 +291,21 @@ async def _upsert_range_batch(session: AsyncSession, game_id: int, rows: list[tu
 
 
 async def _update_game_summary(session: AsyncSession, params: dict[str, object]) -> None:
+    # Coalesce every column so a score-only poll (player count fetch failed) does not
+    # blank the player-count fields, and a player-count-only poll does not blank the
+    # score fields. Each branch only writes what it actually fetched.
     await session.execute(
         text(
             """
             update games
             set
-                steam_current_players = :concurrent_players,
-                steam_current_players_sampled_at = :sampled_at,
-                steam_player_24h_peak = :steam_player_24h_peak,
-                steam_player_24h_low_observed = :steam_player_24h_low_observed,
-                steam_player_all_time_peak = :steam_player_all_time_peak,
-                steam_player_all_time_peak_at = :steam_player_all_time_peak_at,
-                steam_player_stats_synced_at = :sampled_at,
+                steam_current_players = coalesce(:concurrent_players, steam_current_players),
+                steam_current_players_sampled_at = coalesce(:player_sampled_at, steam_current_players_sampled_at),
+                steam_player_24h_peak = coalesce(:steam_player_24h_peak, steam_player_24h_peak),
+                steam_player_24h_low_observed = coalesce(:steam_player_24h_low_observed, steam_player_24h_low_observed),
+                steam_player_all_time_peak = coalesce(:steam_player_all_time_peak, steam_player_all_time_peak),
+                steam_player_all_time_peak_at = coalesce(:steam_player_all_time_peak_at, steam_player_all_time_peak_at),
+                steam_player_stats_synced_at = coalesce(:player_sampled_at, steam_player_stats_synced_at),
                 steam_user_score = coalesce(:steam_user_score, steam_user_score),
                 steam_sample_size = coalesce(:steam_sample_size, steam_sample_size)
             where id = :game_id
@@ -348,7 +355,7 @@ async def mirror_poll_to_main_db(
     tracked_app: TrackedApp,
     *,
     sampled_at: datetime,
-    concurrent_players: int,
+    concurrent_players: int | None,
     latest_24h_high: int | None,
     latest_24h_low: int | None,
     all_time_peak_players: int | None,
@@ -381,26 +388,27 @@ async def mirror_poll_to_main_db(
             )
             return False
 
-        await session.execute(
-            text(
-                """
-                insert into steam_player_snapshots (game_id, sampled_at, concurrent_players)
-                select :game_id, :sampled_at, :concurrent_players
-                where not exists (
-                    select 1
-                    from steam_player_snapshots
-                    where game_id = :game_id and sampled_at = :sampled_at
-                )
-                """
-            ),
-            {
-                "game_id": game_id,
-                "sampled_at": sampled_at,
-                "concurrent_players": concurrent_players,
-            },
-        )
+        if concurrent_players is not None:
+            await session.execute(
+                text(
+                    """
+                    insert into steam_player_snapshots (game_id, sampled_at, concurrent_players)
+                    select :game_id, :sampled_at, :concurrent_players
+                    where not exists (
+                        select 1
+                        from steam_player_snapshots
+                        where game_id = :game_id and sampled_at = :sampled_at
+                    )
+                    """
+                ),
+                {
+                    "game_id": game_id,
+                    "sampled_at": sampled_at,
+                    "concurrent_players": concurrent_players,
+                },
+            )
 
-        if latest_24h_high is not None and latest_24h_low is not None:
+        if concurrent_players is not None and latest_24h_high is not None and latest_24h_low is not None:
             await session.execute(
                 text(
                     """
