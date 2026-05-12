@@ -235,7 +235,7 @@ async def get_due_launch_watch_steam_app_ids(
             TrackedApp.last_polled_at.asc().nullslast(),
             TrackedApp.steam_app_id.asc(),
         )
-        .limit(settings.bootstrap_batch_limit)
+        .limit(settings.launch_watch_batch_limit)
     )
     return list(result.scalars().all())
 

@@ -47,6 +47,7 @@ class Settings(BaseSettings):
     hot_poll_batch_limit: int = 250
     warm_poll_batch_limit: int = 2500
     bootstrap_batch_limit: int = 500
+    launch_watch_batch_limit: int = 100
     worker_cycle_max_seconds: int | None = None
     worker_cycle_shutdown_grace_seconds: int = 60
     startup_bootstrap_max_batches: int = 25

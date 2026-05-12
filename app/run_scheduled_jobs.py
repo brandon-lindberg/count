@@ -26,8 +26,9 @@ def build_parser() -> argparse.ArgumentParser:
         choices=PIPELINE_CHOICES,
         default=PIPELINE_ALL,
         help=(
-            "Which job group to run: maintenance (registry + bootstrap + launch), "
-            "hot / warm (player counts only), scores (Steam reviews only), or all (legacy single-process order)."
+            "Which job group to run: maintenance (short launch-watch), registry (full catalog sync), "
+            "bootstrap (long first-success backfill), hot / warm (player counts only), scores "
+            "(Steam reviews only), or all (legacy single-process order)."
         ),
     )
     return parser

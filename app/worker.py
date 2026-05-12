@@ -34,12 +34,16 @@ RUNTIME_BUDGET_EXHAUSTED_ERROR = "runtime_budget_exhausted"
 # Pipelines for `run_scheduled_jobs --pipeline` (separate GitHub Actions jobs, no shared queue).
 PIPELINE_ALL = "all"
 PIPELINE_MAINTENANCE = "maintenance"
+PIPELINE_REGISTRY = "registry"
+PIPELINE_BOOTSTRAP = "bootstrap"
 PIPELINE_HOT = "hot"
 PIPELINE_WARM = "warm"
 PIPELINE_SCORES = "scores"
 PIPELINE_CHOICES: tuple[str, ...] = (
     PIPELINE_ALL,
     PIPELINE_MAINTENANCE,
+    PIPELINE_REGISTRY,
+    PIPELINE_BOOTSTRAP,
     PIPELINE_HOT,
     PIPELINE_WARM,
     PIPELINE_SCORES,
@@ -446,12 +450,14 @@ def is_latest_job_run_due(
 
 def build_pipeline_definitions(pipeline: str = PIPELINE_ALL) -> list[ScheduledJobDefinition]:
     maintenance = [
-        ScheduledJobDefinition("import_registry", settings.registry_import_minutes, import_registry_job),
-        ScheduledJobDefinition("bootstrap_poll", settings.bootstrap_poll_minutes, bootstrap_poll_job),
         ScheduledJobDefinition("launch_watch_poll", settings.bootstrap_poll_minutes, launch_watch_poll_job),
     ]
     if pipeline == PIPELINE_MAINTENANCE:
         return maintenance
+    if pipeline == PIPELINE_REGISTRY:
+        return [ScheduledJobDefinition("import_registry", settings.registry_import_minutes, import_registry_job)]
+    if pipeline == PIPELINE_BOOTSTRAP:
+        return [ScheduledJobDefinition("bootstrap_poll", settings.bootstrap_poll_minutes, bootstrap_poll_job)]
     if pipeline == PIPELINE_HOT:
         return [ScheduledJobDefinition("poll_hot", settings.hot_poll_minutes, _run_poll_hot_players_only)]
     if pipeline == PIPELINE_WARM:
@@ -460,7 +466,9 @@ def build_pipeline_definitions(pipeline: str = PIPELINE_ALL) -> list[ScheduledJo
         return [ScheduledJobDefinition("sync_user_scores", settings.user_score_poll_minutes, sync_user_scores_job)]
     if pipeline == PIPELINE_ALL:
         return [
+            ScheduledJobDefinition("import_registry", settings.registry_import_minutes, import_registry_job),
             *maintenance,
+            ScheduledJobDefinition("bootstrap_poll", settings.bootstrap_poll_minutes, bootstrap_poll_job),
             ScheduledJobDefinition("poll_hot", settings.hot_poll_minutes, _run_poll_hot_players_only),
             ScheduledJobDefinition("poll_warm", settings.warm_poll_minutes, _run_poll_warm_players_only),
             ScheduledJobDefinition("sync_user_scores", settings.user_score_poll_minutes, sync_user_scores_job),
@@ -512,11 +520,11 @@ async def run_due_jobs_once(
     await bootstrap()
     executed: list[str] = []
 
-    # HOT/WARM/scores workflows are on their own GitHub cron; the workflow schedule
-    # is the throttle. Do not also skip based on job_runs — that causes "manual run
-    # then scheduled run does nothing" and double-clocks with pipeline=all. Per-app
-    # work is still limited by get_due_* queries (last_polled_at / score sync time).
-    force_jobs = force_all or pipeline in (PIPELINE_HOT, PIPELINE_WARM, PIPELINE_SCORES)
+    # Dedicated GitHub workflows are already throttled by their own cron. Do not also
+    # skip based on job_runs; that causes "manual run then scheduled run does
+    # nothing" and double-clocks with pipeline=all. Per-app work is still limited
+    # by get_due_* queries (last_polled_at / score sync time).
+    force_jobs = force_all or pipeline != PIPELINE_ALL
 
     for definition in build_pipeline_definitions(pipeline):
         if not has_worker_runtime_budget():

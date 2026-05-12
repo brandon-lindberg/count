@@ -1,5 +1,7 @@
 name: Worker (maintenance)
 
+# Short lane only. Long full-catalog registry sync and bootstrap backfill have
+# separate workflows so this job can stay frequent without blocking HOT/WARM.
 on:
   schedule:
     - cron: "5,20,35,50 * * * *"
@@ -21,7 +23,7 @@ concurrency:
 jobs:
   run-maintenance:
     runs-on: ubuntu-latest
-    timeout-minutes: 90
+    timeout-minutes: 30
     env:
       APP_NAME: Steam Player Count Scraper
       ENVIRONMENT: production
@@ -34,12 +36,10 @@ jobs:
       MIRROR_DATABASE_USE_SSL: ${{ vars.MIRROR_DATABASE_USE_SSL || 'false' }}
       REQUIRE_MIRROR_SUCCESS: "true"
       HTTP_TIMEOUT_SECONDS: ${{ vars.HTTP_TIMEOUT_SECONDS || '45' }}
-      SOURCE_API_PAGE_SIZE: ${{ vars.SOURCE_API_PAGE_SIZE || '50' }}
       BOOTSTRAP_POLL_MINUTES: "5"
-      BOOTSTRAP_BATCH_LIMIT: ${{ vars.BOOTSTRAP_BATCH_LIMIT || '100' }}
-      REGISTRY_IMPORT_MINUTES: ${{ vars.REGISTRY_IMPORT_MINUTES || '15' }}
-      WORKER_CYCLE_MAX_SECONDS: "4800"
-      WORKER_CYCLE_SHUTDOWN_GRACE_SECONDS: "120"
+      LAUNCH_WATCH_BATCH_LIMIT: ${{ vars.LAUNCH_WATCH_BATCH_LIMIT || '100' }}
+      WORKER_CYCLE_MAX_SECONDS: "1500"
+      WORKER_CYCLE_SHUTDOWN_GRACE_SECONDS: "90"
     steps:
       - uses: actions/checkout@v5
 

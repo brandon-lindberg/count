@@ -149,8 +149,8 @@ def test_scheduled_job_definitions_include_pipelines() -> None:
 
     assert job_names == [
         "import_registry",
-        "bootstrap_poll",
         "launch_watch_poll",
+        "bootstrap_poll",
         "poll_hot",
         "poll_warm",
         "sync_user_scores",
@@ -166,7 +166,17 @@ def test_pipeline_definitions_hot_is_players_only_job() -> None:
 
 def test_pipeline_definitions_maintenance_excludes_tier_polls() -> None:
     names = [j.job_name for j in worker_module.build_pipeline_definitions(worker_module.PIPELINE_MAINTENANCE)]
-    assert names == ["import_registry", "bootstrap_poll", "launch_watch_poll"]
+    assert names == ["launch_watch_poll"]
+
+
+def test_pipeline_definitions_registry_is_catalog_sync_only() -> None:
+    names = [j.job_name for j in worker_module.build_pipeline_definitions(worker_module.PIPELINE_REGISTRY)]
+    assert names == ["import_registry"]
+
+
+def test_pipeline_definitions_bootstrap_is_backfill_only() -> None:
+    names = [j.job_name for j in worker_module.build_pipeline_definitions(worker_module.PIPELINE_BOOTSTRAP)]
+    assert names == ["bootstrap_poll"]
 
 
 @pytest.mark.asyncio
@@ -228,7 +238,7 @@ def test_scheduler_registration_is_hot_warm_only(monkeypatch: pytest.MonkeyPatch
 
 
 @pytest.mark.asyncio
-async def test_run_due_jobs_once_hot_pipeline_always_forces_job_interval(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_run_due_jobs_once_dedicated_pipeline_always_forces_job_interval(monkeypatch: pytest.MonkeyPatch) -> None:
     force_flags: list[bool] = []
 
     async def fake_bootstrap() -> None:
@@ -242,10 +252,10 @@ async def test_run_due_jobs_once_hot_pipeline_always_forces_job_interval(monkeyp
     monkeypatch.setattr(worker_module, "maybe_run_scheduled_job", fake_maybe_run)
     monkeypatch.setattr(worker_module, "has_worker_runtime_budget", lambda **_: True)
 
-    executed = await worker_module.run_due_jobs_once(pipeline=worker_module.PIPELINE_HOT)
+    executed = await worker_module.run_due_jobs_once(pipeline=worker_module.PIPELINE_BOOTSTRAP)
 
     assert force_flags == [True]
-    assert executed == ["poll_hot"]
+    assert executed == ["bootstrap_poll"]
 
 
 @pytest.mark.asyncio

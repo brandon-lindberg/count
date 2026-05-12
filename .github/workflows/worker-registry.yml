@@ -1,15 +1,14 @@
-name: Worker (WARM players)
+name: Worker (registry import)
 
-# Cron is UTC. This workflow is intentionally isolated from maintenance/bootstrap
-# so WARM polling can run on its own long-run cadence.
 on:
   schedule:
-    # Every 3h at :18 UTC; align with WARM_POLL_MINUTES default 180 via repo vars if you change cadence.
-    - cron: "18 */3 * * *"
+    # Full catalog sync over the source API. This can be long because it walks the
+    # whole source catalog and deactivates scraper rows missing from that full scan.
+    - cron: "7 */6 * * *"
   workflow_dispatch:
     inputs:
       force_all:
-        description: Run poll_warm regardless of interval state
+        description: Run import_registry regardless of interval state
         required: false
         default: false
         type: boolean
@@ -18,13 +17,13 @@ permissions:
   contents: read
 
 concurrency:
-  group: player-count-scraper-warm
+  group: player-count-scraper-registry
   cancel-in-progress: false
 
 jobs:
-  run-warm:
+  run-registry:
     runs-on: ubuntu-latest
-    timeout-minutes: 240
+    timeout-minutes: 330
     env:
       APP_NAME: Steam Player Count Scraper
       ENVIRONMENT: production
@@ -37,10 +36,10 @@ jobs:
       MIRROR_DATABASE_USE_SSL: ${{ vars.MIRROR_DATABASE_USE_SSL || 'false' }}
       REQUIRE_MIRROR_SUCCESS: "true"
       HTTP_TIMEOUT_SECONDS: ${{ vars.HTTP_TIMEOUT_SECONDS || '45' }}
-      WARM_POLL_MINUTES: ${{ vars.WARM_POLL_MINUTES || '180' }}
-      WARM_POLL_BATCH_LIMIT: ${{ vars.WARM_POLL_BATCH_LIMIT || '2500' }}
-      WORKER_CYCLE_MAX_SECONDS: "13200"
-      WORKER_CYCLE_SHUTDOWN_GRACE_SECONDS: "120"
+      SOURCE_API_PAGE_SIZE: ${{ vars.SOURCE_API_PAGE_SIZE || '250' }}
+      REGISTRY_IMPORT_MINUTES: ${{ vars.REGISTRY_IMPORT_MINUTES || '360' }}
+      WORKER_CYCLE_MAX_SECONDS: "19800"
+      WORKER_CYCLE_SHUTDOWN_GRACE_SECONDS: "180"
     steps:
       - uses: actions/checkout@v5
 
@@ -56,11 +55,10 @@ jobs:
         run: |
           test -n "$DATABASE_URL" || { echo "DATABASE_URL secret is required"; exit 1; }
           test -n "$SOURCE_API_BASE_URL" || { echo "SOURCE_API_BASE_URL repo variable is required"; exit 1; }
-          test -n "$MIRROR_DATABASE_URL" || { echo "MIRROR_DATABASE_URL secret is required to mirror updates into backend DB"; exit 1; }
 
-      - name: Run WARM player pipeline
+      - name: Run registry import pipeline
         run: |
-          ARGS="--pipeline warm"
+          ARGS="--pipeline registry"
           if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ "${{ inputs.force_all }}" = "true" ]; then
             ARGS="$ARGS --force-all"
           fi
