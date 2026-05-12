@@ -2,7 +2,7 @@ name: Worker (HOT players)
 
 on:
   schedule:
-    - cron: "8,38 * * * *"
+    - cron: "10,25,40,55 * * * *"
   workflow_dispatch:
     inputs:
       force_all:
@@ -39,6 +39,11 @@ jobs:
       WORKER_CYCLE_MAX_SECONDS: "1200"
       WORKER_CYCLE_SHUTDOWN_GRACE_SECONDS: "60"
     steps:
+      - name: Trigger metadata (schedule vs manual)
+        run: |
+          echo "github.event_name=${{ github.event_name }}"
+          echo "github.event.schedule=${{ github.event.schedule }}"
+
       - uses: actions/checkout@v5
 
       - uses: actions/setup-python@v5

@@ -512,11 +512,17 @@ async def run_due_jobs_once(
     await bootstrap()
     executed: list[str] = []
 
+    # HOT/WARM/scores workflows are on their own GitHub cron; the workflow schedule
+    # is the throttle. Do not also skip based on job_runs — that causes "manual run
+    # then scheduled run does nothing" and double-clocks with pipeline=all. Per-app
+    # work is still limited by get_due_* queries (last_polled_at / score sync time).
+    force_jobs = force_all or pipeline in (PIPELINE_HOT, PIPELINE_WARM, PIPELINE_SCORES)
+
     for definition in build_pipeline_definitions(pipeline):
         if not has_worker_runtime_budget():
             logger.warning("Stopping one-shot worker cycle before %s; runtime budget is nearly exhausted", definition.job_name)
             break
-        if await maybe_run_scheduled_job(definition, now=now, force=force_all):
+        if await maybe_run_scheduled_job(definition, now=now, force=force_jobs):
             executed.append(definition.job_name)
 
     logger.info("One-shot worker cycle finished. Jobs run: %s", ", ".join(executed) if executed else "none")

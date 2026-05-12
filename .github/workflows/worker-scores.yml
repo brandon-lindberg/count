@@ -1,8 +1,9 @@
 name: Worker (user scores)
 
+# Schedules are UTC and only run from the default branch — see worker-hot.yml header.
 on:
   schedule:
-    - cron: "12,42 * * * *"
+    - cron: "12,27,42,57 * * * *"
   workflow_dispatch:
     inputs:
       force_all:

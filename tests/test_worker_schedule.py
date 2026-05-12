@@ -225,3 +225,50 @@ def test_scheduler_registration_is_hot_warm_only(monkeypatch: pytest.MonkeyPatch
     assert "poll_warm" in registered_job_ids
     assert "sync_user_scores" in registered_job_ids
     assert "poll_cold" not in registered_job_ids
+
+
+@pytest.mark.asyncio
+async def test_run_due_jobs_once_hot_pipeline_always_forces_job_interval(monkeypatch: pytest.MonkeyPatch) -> None:
+    force_flags: list[bool] = []
+
+    async def fake_bootstrap() -> None:
+        return None
+
+    async def fake_maybe_run(definition, *, now=None, force=False):
+        force_flags.append(force)
+        return True
+
+    monkeypatch.setattr(worker_module, "bootstrap", fake_bootstrap)
+    monkeypatch.setattr(worker_module, "maybe_run_scheduled_job", fake_maybe_run)
+    monkeypatch.setattr(worker_module, "has_worker_runtime_budget", lambda **_: True)
+
+    executed = await worker_module.run_due_jobs_once(pipeline=worker_module.PIPELINE_HOT)
+
+    assert force_flags == [True]
+    assert executed == ["poll_hot"]
+
+
+@pytest.mark.asyncio
+async def test_run_due_jobs_once_all_pipeline_does_not_force_by_default(monkeypatch: pytest.MonkeyPatch) -> None:
+    force_flags: list[bool] = []
+
+    async def fake_bootstrap() -> None:
+        return None
+
+    async def fake_maybe_run(definition, *, now=None, force=False):
+        force_flags.append(force)
+        return False
+
+    def fake_build_defs(_pipeline: str):
+        return [
+            worker_module.ScheduledJobDefinition("only_job", 5, AsyncMock()),
+        ]
+
+    monkeypatch.setattr(worker_module, "bootstrap", fake_bootstrap)
+    monkeypatch.setattr(worker_module, "maybe_run_scheduled_job", fake_maybe_run)
+    monkeypatch.setattr(worker_module, "has_worker_runtime_budget", lambda **_: True)
+    monkeypatch.setattr(worker_module, "build_pipeline_definitions", fake_build_defs)
+
+    await worker_module.run_due_jobs_once(pipeline=worker_module.PIPELINE_ALL)
+
+    assert force_flags == [False]
