@@ -8,7 +8,8 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
-from sqlalchemy import select
+from sqlalchemy import func, select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_settings
 from app.database import SessionLocal
@@ -25,6 +26,7 @@ from app.services.polling import (
 )
 from app.services.registry_importer import import_registry
 from app.services.steam_provider import SteamAppNotFoundError, SteamCurrentPlayersProvider
+from app.services.tiering import poll_interval_minutes
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -220,6 +222,61 @@ async def import_registry_job() -> None:
         await record_job("import_registry", processed, 0, 1, str(exc)[:2000])
 
 
+async def log_tier_due_context(
+    session: AsyncSession,
+    tier: Tier,
+    *,
+    now: datetime,
+) -> None:
+    interval_minutes = poll_interval_minutes(tier, settings)
+    cutoff = now - timedelta(minutes=interval_minutes)
+    base_filters = (
+        TrackedApp.is_active.is_(True),
+        TrackedApp.effective_tier == tier,
+    )
+    eligible_filters = (
+        *base_filters,
+        TrackedApp.last_success_at.is_not(None),
+    )
+
+    active_count = await session.scalar(select(func.count()).select_from(TrackedApp).where(*base_filters))
+    eligible_count = await session.scalar(select(func.count()).select_from(TrackedApp).where(*eligible_filters))
+    never_polled_count = await session.scalar(
+        select(func.count())
+        .select_from(TrackedApp)
+        .where(*eligible_filters, TrackedApp.last_polled_at.is_(None))
+    )
+    due_by_time_count = await session.scalar(
+        select(func.count())
+        .select_from(TrackedApp)
+        .where(
+            *eligible_filters,
+            TrackedApp.last_polled_at.is_not(None),
+            TrackedApp.last_polled_at <= cutoff,
+        )
+    )
+    oldest_last_polled_at = await session.scalar(
+        select(func.min(TrackedApp.last_polled_at)).where(*eligible_filters)
+    )
+    newest_last_polled_at = await session.scalar(
+        select(func.max(TrackedApp.last_polled_at)).where(*eligible_filters)
+    )
+
+    logger.info(
+        "Tier %s due context: poll_interval_minutes=%s cutoff=%s active=%s eligible_with_success=%s "
+        "never_polled=%s due_by_time=%s oldest_last_polled_at=%s newest_last_polled_at=%s",
+        tier.value,
+        interval_minutes,
+        cutoff.isoformat(),
+        active_count or 0,
+        eligible_count or 0,
+        never_polled_count or 0,
+        due_by_time_count or 0,
+        oldest_last_polled_at.isoformat() if oldest_last_polled_at else None,
+        newest_last_polled_at.isoformat() if newest_last_polled_at else None,
+    )
+
+
 async def poll_tier_job(tier: Tier, *, mode: PollAppMode = PollAppMode.full) -> None:
     if tier == Tier.cold:
         logger.info("Cold polling is disabled; skipping tier poll")
@@ -231,7 +288,9 @@ async def poll_tier_job(tier: Tier, *, mode: PollAppMode = PollAppMode.full) -> 
     stopped_for_budget = False
     try:
         async with SessionLocal() as session:
-            due_ids = await get_due_steam_app_ids(session, tier, settings)
+            due_query_now = datetime.now(timezone.utc)
+            due_ids = await get_due_steam_app_ids(session, tier, settings, now=due_query_now)
+            await log_tier_due_context(session, tier, now=due_query_now)
         async with SteamCurrentPlayersProvider(timeout_seconds=settings.http_timeout_seconds) as provider:
             for steam_app_id in due_ids:
                 if not has_worker_runtime_budget():

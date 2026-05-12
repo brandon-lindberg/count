@@ -4,7 +4,7 @@ name: Worker (HOT players)
 # so time-sensitive HOT polling is not queued behind long backfill work.
 on:
   schedule:
-    - cron: "10,25,40,55 * * * *"
+    - cron: "*/5 * * * *"
   workflow_dispatch:
     inputs:
       force_all:
