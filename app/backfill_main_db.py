@@ -41,7 +41,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--only-unmirrored",
         action="store_true",
-        help="Skip apps that already have mirrored Steam history in the main database.",
+        help=(
+            "Skip re-copying raw player snapshots / range history when the main DB already has them, "
+            "but still push the latest games row and Steam user_scores from the scraper (fixes missing scores)."
+        ),
     )
     return parser
 
@@ -180,8 +183,8 @@ async def _run(args: argparse.Namespace) -> int:
 
             if update.app_stats.apps_skipped_already_mirrored:
                 print(
-                    f"{progress_prefix} skipped Steam app {update.tracked_app.steam_app_id}"
-                    f" ({update.tracked_app.title}) because mirrored history already exists in the main DB."
+                    f"{progress_prefix} synced summary/Steam scores for Steam app {update.tracked_app.steam_app_id}"
+                    f" ({update.tracked_app.title}); skipped re-copying snapshot/range history (already in main DB)."
                 )
                 return
 
@@ -202,9 +205,12 @@ async def _run(args: argparse.Namespace) -> int:
 
     print("")
     print("Backfill summary")
-    print(f"- Apps mirrored: {_format_count(aggregate.apps_processed)}")
+    print(f"- Apps processed (full mirror or summary/score sync): {_format_count(aggregate.apps_processed)}")
     print(f"- Apps skipped (unmapped): {_format_count(aggregate.apps_skipped_unmapped)}")
-    print(f"- Apps skipped (already mirrored): {_format_count(aggregate.apps_skipped_already_mirrored)}")
+    print(
+        "- Apps where bulk snapshot/range copy was skipped (summary still pushed from scraper): "
+        f"{_format_count(aggregate.apps_skipped_already_mirrored)}"
+    )
     print(f"- Apps failed: {_format_count(aggregate.apps_failed)}")
     print(f"- Raw samples seen: {_format_count(aggregate.raw_samples_seen)}")
     print(f"- Raw samples inserted: {_format_count(aggregate.raw_samples_inserted)}")

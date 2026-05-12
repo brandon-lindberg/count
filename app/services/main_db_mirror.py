@@ -498,54 +498,57 @@ async def backfill_tracked_app_to_main_db(
             stats.apps_skipped_unmapped = 1
             return stats
 
-        if skip_if_already_mirrored and await _game_has_mirrored_history(mirror_session, game_id):
+        skip_bulk_copy = bool(
+            skip_if_already_mirrored and await _game_has_mirrored_history(mirror_session, game_id)
+        )
+        if skip_bulk_copy:
             stats.apps_skipped_already_mirrored = 1
-            return stats
 
-        raw_cursor: datetime | None = None
-        while True:
-            raw_query = (
-                select(PlayerSample.sampled_at, PlayerSample.concurrent_players)
-                .where(PlayerSample.tracked_app_id == tracked_app.id)
-                .order_by(PlayerSample.sampled_at.asc())
-                .limit(batch_size)
-            )
-            if raw_cursor is not None:
-                raw_query = raw_query.where(PlayerSample.sampled_at > raw_cursor)
-            raw_rows = list((await scraper_session.execute(raw_query)).all())
-            if not raw_rows:
-                break
-
-            typed_raw_rows = [(sampled_at, concurrent_players) for sampled_at, concurrent_players in raw_rows]
-            stats.raw_samples_seen += len(typed_raw_rows)
-            stats.raw_samples_inserted += await _insert_snapshot_batch(mirror_session, game_id, typed_raw_rows)
-            raw_cursor = typed_raw_rows[-1][0]
-
-        range_cursor: datetime | None = None
-        while True:
-            range_query = (
-                select(
-                    PlayerActivityHourly.window_ending_at,
-                    PlayerActivityHourly.observed_24h_high,
-                    PlayerActivityHourly.observed_24h_low,
+        if not skip_bulk_copy:
+            raw_cursor: datetime | None = None
+            while True:
+                raw_query = (
+                    select(PlayerSample.sampled_at, PlayerSample.concurrent_players)
+                    .where(PlayerSample.tracked_app_id == tracked_app.id)
+                    .order_by(PlayerSample.sampled_at.asc())
+                    .limit(batch_size)
                 )
-                .where(PlayerActivityHourly.tracked_app_id == tracked_app.id)
-                .order_by(PlayerActivityHourly.window_ending_at.asc())
-                .limit(batch_size)
-            )
-            if range_cursor is not None:
-                range_query = range_query.where(PlayerActivityHourly.window_ending_at > range_cursor)
-            range_rows = list((await scraper_session.execute(range_query)).all())
-            if not range_rows:
-                break
+                if raw_cursor is not None:
+                    raw_query = raw_query.where(PlayerSample.sampled_at > raw_cursor)
+                raw_rows = list((await scraper_session.execute(raw_query)).all())
+                if not raw_rows:
+                    break
 
-            typed_range_rows = [
-                (sampled_at, players_24h_high, players_24h_low)
-                for sampled_at, players_24h_high, players_24h_low in range_rows
-            ]
-            stats.range_points_seen += len(typed_range_rows)
-            stats.range_points_upserted += await _upsert_range_batch(mirror_session, game_id, typed_range_rows)
-            range_cursor = typed_range_rows[-1][0]
+                typed_raw_rows = [(sampled_at, concurrent_players) for sampled_at, concurrent_players in raw_rows]
+                stats.raw_samples_seen += len(typed_raw_rows)
+                stats.raw_samples_inserted += await _insert_snapshot_batch(mirror_session, game_id, typed_raw_rows)
+                raw_cursor = typed_raw_rows[-1][0]
+
+            range_cursor: datetime | None = None
+            while True:
+                range_query = (
+                    select(
+                        PlayerActivityHourly.window_ending_at,
+                        PlayerActivityHourly.observed_24h_high,
+                        PlayerActivityHourly.observed_24h_low,
+                    )
+                    .where(PlayerActivityHourly.tracked_app_id == tracked_app.id)
+                    .order_by(PlayerActivityHourly.window_ending_at.asc())
+                    .limit(batch_size)
+                )
+                if range_cursor is not None:
+                    range_query = range_query.where(PlayerActivityHourly.window_ending_at > range_cursor)
+                range_rows = list((await scraper_session.execute(range_query)).all())
+                if not range_rows:
+                    break
+
+                typed_range_rows = [
+                    (sampled_at, players_24h_high, players_24h_low)
+                    for sampled_at, players_24h_high, players_24h_low in range_rows
+                ]
+                stats.range_points_seen += len(typed_range_rows)
+                stats.range_points_upserted += await _upsert_range_batch(mirror_session, game_id, typed_range_rows)
+                range_cursor = typed_range_rows[-1][0]
 
         await _update_game_summary(
             mirror_session,

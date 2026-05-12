@@ -156,8 +156,8 @@ async def _run_dashboard_backfill(*, batch_size: int, only_unmirrored: bool, set
 
                 if update.app_stats.apps_skipped_already_mirrored:
                     _status.current_message = (
-                        f"Skipped Steam app {update.tracked_app.steam_app_id} ({update.tracked_app.title})"
-                        " because mirrored history already exists."
+                        f"Synced summary/Steam scores for Steam app {update.tracked_app.steam_app_id} "
+                        f"({update.tracked_app.title}); skipped re-copying snapshot/range history."
                     )
                     return
 
@@ -180,8 +180,10 @@ async def _run_dashboard_backfill(*, batch_size: int, only_unmirrored: bool, set
         _status.finished_at = datetime.now(timezone.utc)
         _status.apply_aggregate(aggregate)
         _status.current_message = (
-            f"Backfill completed. Mirrored {aggregate.apps_processed:,} apps, "
-            f"skipped {aggregate.apps_skipped_unmapped + aggregate.apps_skipped_already_mirrored:,}, "
+            f"Backfill completed. Apps processed {aggregate.apps_processed:,} "
+            f"(includes summary/score sync when bulk history was skipped), "
+            f"skipped (unmapped) {aggregate.apps_skipped_unmapped:,}, "
+            f"bulk history copy skipped for {aggregate.apps_skipped_already_mirrored:,}, "
             f"failed {aggregate.apps_failed:,}."
         )
 
