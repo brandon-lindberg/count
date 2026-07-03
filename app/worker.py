@@ -15,6 +15,10 @@ from app.config import get_settings
 from app.database import SessionLocal
 from app.models import JobRun, Tier, TrackedApp
 from app.services.job_runs import complete_job_run, start_job_run
+from app.services.main_db_mirror import (
+    mirror_is_configured,
+    reconcile_recent_app_history_to_main_db,
+)
 from app.services.partitions import ensure_future_partitions
 from app.services.polling import (
     PollAppMode,
@@ -41,6 +45,7 @@ PIPELINE_BOOTSTRAP = "bootstrap"
 PIPELINE_HOT = "hot"
 PIPELINE_WARM = "warm"
 PIPELINE_SCORES = "scores"
+PIPELINE_RECONCILE = "reconcile"
 PIPELINE_CHOICES: tuple[str, ...] = (
     PIPELINE_ALL,
     PIPELINE_MAINTENANCE,
@@ -49,6 +54,7 @@ PIPELINE_CHOICES: tuple[str, ...] = (
     PIPELINE_HOT,
     PIPELINE_WARM,
     PIPELINE_SCORES,
+    PIPELINE_RECONCILE,
 )
 _tier_poll_queue: asyncio.Queue[Tier] | None = None
 _tier_poll_worker_task: asyncio.Task[None] | None = None
@@ -479,6 +485,82 @@ async def launch_watch_poll_job() -> int:
         return len(due_ids)
 
 
+async def mirror_reconcile_job() -> None:
+    """Re-copy the recent window of samples/rollups into the main DB.
+
+    Poll-time mirroring is the primary delivery path; this job is a safety net
+    that repairs any rows the mirror missed (e.g. the main DB was briefly
+    unreachable). Inserts are if-absent, so clean runs are cheap no-ops.
+    """
+    if not mirror_is_configured(settings):
+        logger.info("Skipping mirror reconcile; mirror database is not configured")
+        return
+
+    since = datetime.now(timezone.utc) - timedelta(days=settings.mirror_reconcile_days)
+    processed = 0
+    success = 0
+    failure = 0
+    raw_inserted = 0
+    range_upserted = 0
+    stopped_for_budget = False
+    error_preview: str | None = None
+    try:
+        async with SessionLocal() as session:
+            tracked_ids = list(
+                (
+                    await session.execute(
+                        select(TrackedApp.id)
+                        .where(TrackedApp.is_active.is_(True))
+                        .order_by(TrackedApp.id.asc())
+                    )
+                ).scalars()
+            )
+
+        for tracked_id in tracked_ids:
+            if not has_worker_runtime_budget():
+                logger.warning("Stopping mirror reconcile early; worker runtime budget is nearly exhausted")
+                stopped_for_budget = True
+                break
+            async with SessionLocal() as session:
+                tracked_app = await session.get(TrackedApp, tracked_id)
+                if tracked_app is None:
+                    continue
+                processed += 1
+                try:
+                    stats = await reconcile_recent_app_history_to_main_db(
+                        session,
+                        tracked_app,
+                        since=since,
+                        settings=settings,
+                    )
+                    raw_inserted += stats.raw_samples_inserted
+                    range_upserted += stats.range_points_upserted
+                    success += 1
+                except Exception as exc:
+                    failure += 1
+                    if error_preview is None:
+                        error_preview = str(exc)[:2000]
+                    logger.exception("Mirror reconcile failed for Steam app %s", tracked_app.steam_app_id)
+
+        await record_job(
+            "mirror_reconcile",
+            processed,
+            success,
+            failure,
+            RUNTIME_BUDGET_EXHAUSTED_ERROR if stopped_for_budget else error_preview,
+        )
+        logger.info(
+            "Mirror reconcile finished: %s apps, %s raw samples repaired, %s range rows repaired, %s failures",
+            processed,
+            raw_inserted,
+            range_upserted,
+            failure,
+        )
+    except Exception as exc:
+        logger.exception("Mirror reconcile crashed")
+        await record_job("mirror_reconcile", processed, success, failure + 1, str(exc)[:2000])
+
+
 async def bootstrap() -> None:
     async with SessionLocal() as session:
         await ensure_future_partitions(session, settings.partition_months_ahead)
@@ -523,6 +605,8 @@ def build_pipeline_definitions(pipeline: str = PIPELINE_ALL) -> list[ScheduledJo
         return [ScheduledJobDefinition("poll_warm", settings.warm_poll_minutes, _run_poll_warm_players_only)]
     if pipeline == PIPELINE_SCORES:
         return [ScheduledJobDefinition("sync_user_scores", settings.user_score_poll_minutes, sync_user_scores_job)]
+    if pipeline == PIPELINE_RECONCILE:
+        return [ScheduledJobDefinition("mirror_reconcile", settings.mirror_reconcile_minutes, mirror_reconcile_job)]
     if pipeline == PIPELINE_ALL:
         return [
             ScheduledJobDefinition("import_registry", settings.registry_import_minutes, import_registry_job),

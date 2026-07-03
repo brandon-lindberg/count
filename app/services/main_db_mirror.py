@@ -467,6 +467,94 @@ async def mirror_poll_to_main_db(
     return True
 
 
+async def reconcile_recent_app_history_to_main_db(
+    scraper_session: AsyncSession,
+    tracked_app: TrackedApp,
+    *,
+    since: datetime,
+    batch_size: int = 1000,
+    settings: Settings | None = None,
+) -> MirrorBackfillStats:
+    """Copy any samples/rollups newer than ``since`` that the poll-time mirror missed.
+
+    Insert-if-absent semantics make this idempotent: rows already mirrored are
+    skipped, so a clean run is cheap and a gap (e.g. the main DB was briefly
+    unreachable during polling) is repaired without touching older history.
+    """
+    effective_settings = settings or get_settings()
+    stats = MirrorBackfillStats()
+
+    if not mirror_is_configured(effective_settings):
+        raise RuntimeError("Main DB mirror is not configured")
+
+    if tracked_app.source_game_id is None and not tracked_app.source_game_public_id:
+        stats.apps_skipped_unmapped = 1
+        return stats
+
+    async with get_mirror_session(effective_settings) as mirror_session:
+        if mirror_session is None:
+            raise RuntimeError("Main DB mirror is not configured")
+
+        game_id = await _resolve_game_id(mirror_session, tracked_app)
+        if game_id is None:
+            stats.apps_skipped_unmapped = 1
+            return stats
+
+        raw_cursor: datetime = since
+        while True:
+            raw_rows = list(
+                (
+                    await scraper_session.execute(
+                        select(PlayerSample.sampled_at, PlayerSample.concurrent_players)
+                        .where(
+                            PlayerSample.tracked_app_id == tracked_app.id,
+                            PlayerSample.sampled_at > raw_cursor,
+                        )
+                        .order_by(PlayerSample.sampled_at.asc())
+                        .limit(batch_size)
+                    )
+                ).all()
+            )
+            if not raw_rows:
+                break
+            typed_raw_rows = [(sampled_at, concurrent_players) for sampled_at, concurrent_players in raw_rows]
+            stats.raw_samples_seen += len(typed_raw_rows)
+            stats.raw_samples_inserted += await _insert_snapshot_batch(mirror_session, game_id, typed_raw_rows)
+            raw_cursor = typed_raw_rows[-1][0]
+
+        range_cursor: datetime = since
+        while True:
+            range_rows = list(
+                (
+                    await scraper_session.execute(
+                        select(
+                            PlayerActivityHourly.window_ending_at,
+                            PlayerActivityHourly.observed_24h_high,
+                            PlayerActivityHourly.observed_24h_low,
+                        )
+                        .where(
+                            PlayerActivityHourly.tracked_app_id == tracked_app.id,
+                            PlayerActivityHourly.window_ending_at > range_cursor,
+                        )
+                        .order_by(PlayerActivityHourly.window_ending_at.asc())
+                        .limit(batch_size)
+                    )
+                ).all()
+            )
+            if not range_rows:
+                break
+            typed_range_rows = [
+                (sampled_at, players_24h_high, players_24h_low)
+                for sampled_at, players_24h_high, players_24h_low in range_rows
+            ]
+            stats.range_points_seen += len(typed_range_rows)
+            stats.range_points_upserted += await _upsert_range_batch(mirror_session, game_id, typed_range_rows)
+            range_cursor = typed_range_rows[-1][0]
+
+    stats.apps_processed = 1
+    return stats
+
+
 async def backfill_tracked_app_to_main_db(
     scraper_session: AsyncSession,
     tracked_app: TrackedApp,

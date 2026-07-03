@@ -58,6 +58,13 @@ class Settings(BaseSettings):
     http_timeout_seconds: int = 20
     partition_months_ahead: int = 2
 
+    # /history responses are downsampled to this many points unless the caller
+    # asks for fewer; storage always keeps full resolution.
+    history_default_max_points: int = 700
+    # Recent-window mirror reconcile job (repairs any missed poll-time mirror writes).
+    mirror_reconcile_days: int = 3
+    mirror_reconcile_minutes: int = 1440
+
 
     @field_validator("debug", mode="before")
     @classmethod

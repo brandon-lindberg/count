@@ -427,14 +427,29 @@ async def get_app(steam_app_id: int, db: AsyncSession = Depends(get_db)) -> Trac
     return TrackedAppRead.model_validate(tracked_app)
 
 
+def _downsample_history_points(points: list[PlayerActivityHourly], max_points: int) -> list[PlayerActivityHourly]:
+    """Evenly downsample a chronologically ordered series, keeping first and last points."""
+    if max_points <= 0:
+        return []
+    if len(points) <= max_points:
+        return points
+    if max_points == 1:
+        return [points[-1]]
+
+    last_index = len(points) - 1
+    return [points[round(step * last_index / (max_points - 1))] for step in range(max_points)]
+
+
 @app.get("/api/v1/apps/{steam_app_id}/history", response_model=SteamActivityHistoryResponse, dependencies=[Depends(require_service_auth)])
 async def get_app_history(
     steam_app_id: int,
     window: str = Query(default="1m"),
+    max_points: int | None = Query(default=None, ge=24, le=10000),
     db: AsyncSession = Depends(get_db),
 ) -> SteamActivityHistoryResponse:
     if window not in SUPPORTED_WINDOWS:
         raise HTTPException(status_code=400, detail=f"Unsupported window. Expected one of: {sorted(SUPPORTED_WINDOWS)}")
+    point_budget = max_points if max_points is not None else settings.history_default_max_points
     tracked_app = await _load_tracked_app_or_404(db, steam_app_id)
     latest_bucket = await db.scalar(
         select(func.max(PlayerActivityHourly.window_ending_at)).where(PlayerActivityHourly.steam_app_id == steam_app_id)
@@ -443,16 +458,21 @@ async def get_app_history(
         return SteamActivityHistoryResponse(app=TrackedAppRead.model_validate(tracked_app), window=window, points=[])
 
     window_start = get_history_window_start(latest_bucket, window)
-    points = (
-        await db.execute(
-            select(PlayerActivityHourly)
-            .where(
-                PlayerActivityHourly.steam_app_id == steam_app_id,
-                PlayerActivityHourly.window_ending_at >= window_start,
+    points = list(
+        (
+            await db.execute(
+                select(PlayerActivityHourly)
+                .where(
+                    PlayerActivityHourly.steam_app_id == steam_app_id,
+                    PlayerActivityHourly.window_ending_at >= window_start,
+                )
+                .order_by(PlayerActivityHourly.bucket_started_at.asc())
             )
-            .order_by(PlayerActivityHourly.bucket_started_at.asc())
-        )
-    ).scalars().all()
+        ).scalars().all()
+    )
+    # Downsample before serialization so large windows don't build thousands of
+    # Pydantic models per request; the database keeps full resolution.
+    points = _downsample_history_points(points, point_budget)
     return SteamActivityHistoryResponse(
         app=TrackedAppRead.model_validate(tracked_app),
         window=window,
