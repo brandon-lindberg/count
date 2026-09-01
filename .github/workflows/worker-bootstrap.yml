@@ -4,7 +4,11 @@ on:
   schedule:
     # Long first-success backfill lane. Keep this less frequent than the expected
     # runtime so scheduled runs do not pile up behind each other.
-    - cron: "2 */6 * * *"
+    # Offset three hours after the registry import (07:07/13:07/...) so the two
+    # 330-minute lanes do not start together: both mirror into the backend's
+    # Postgres, and running them in lockstep starved the public site. Bootstrap
+    # follows registry because it backfills the rows registry imports.
+    - cron: "2 3,9,15,21 * * *"
   workflow_dispatch:
     inputs:
       force_all:

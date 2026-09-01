@@ -75,6 +75,10 @@ def _get_mirror_session_factory(settings: Settings) -> async_sessionmaker[AsyncS
     _mirror_engine = create_async_engine(
         settings.mirror_database_url,
         pool_pre_ping=True,
+        pool_size=settings.mirror_pool_size,
+        max_overflow=settings.mirror_max_overflow,
+        pool_timeout=30,
+        pool_recycle=1800,
         connect_args=connect_args,
     )
     _mirror_session_factory = async_sessionmaker(

@@ -19,6 +19,11 @@ class Settings(BaseSettings):
     mirror_database_url: str | None = None
     mirror_database_use_ssl: bool = False
     require_mirror_success: bool = False
+    # Long-running workers overlap by schedule, and every one of them mirrors
+    # into the backend's Postgres. Keep each process's share small so the pool
+    # stays available to the web service that serves the public site.
+    mirror_pool_size: int = 2
+    mirror_max_overflow: int = 3
 
     source_api_base_url: str = 'http://localhost:8000'
     source_api_token: str | None = None
